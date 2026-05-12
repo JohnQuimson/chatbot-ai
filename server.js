@@ -3,7 +3,7 @@ const fs = require('fs');
 const path = require('path');
 const express = require('express');
 const cors = require('cors');
-const pdf = require('pdf-parse'); // Importazione standard
+const pdf = require('pdf-parse');
 const mammoth = require('mammoth');
 require('dotenv').config();
 
@@ -13,8 +13,7 @@ app.use(express.json());
 
 // CONFIGURAZIONE GEMINI
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-// Usiamo il modello che hai confermato funzionante
-const model = genAI.getGenerativeModel({ model: 'gemini-3.1-flash-lite' });
+const model = genAI.getGenerativeModel({ model: 'gemini-3.1-flash-lite' }); // Usa il modello che preferisci, es: gemini-3.1-flash-lite
 
 let conoscenzaIntegrata = '';
 
@@ -22,10 +21,10 @@ let conoscenzaIntegrata = '';
 async function caricaDocumenti() {
    const directoryPath = path.join(__dirname, 'documentazione');
 
-   // Se la cartella non esiste, la crea (evita crash)
    if (!fs.existsSync(directoryPath)) {
+      console.log('⚠️ Cartella documentazione non trovata, la creo...');
       fs.mkdirSync(directoryPath);
-      return 'Cartella documentazione creata. Aggiungi file per istruire il bot.';
+      return '';
    }
 
    const files = fs.readdirSync(directoryPath);
@@ -42,9 +41,17 @@ async function caricaDocumenti() {
          } else if (ext === '.pdf') {
             console.log(`📖 Leggendo PDF: ${file}`);
             const dataBuffer = fs.readFileSync(filePath);
-            // Fix per il TypeError: gestisce sia esportazione diretta che .default
-            const parsePdf = typeof pdf === 'function' ? pdf : pdf.default;
-            const data = await parsePdf(dataBuffer);
+
+            // FIX CRUCIALE: Gestione del pacchetto pdf-parse come funzione o oggetto
+            let data;
+            if (typeof pdf === 'function') {
+               data = await pdf(dataBuffer);
+            } else if (pdf.default && typeof pdf.default === 'function') {
+               data = await pdf.default(dataBuffer);
+            } else {
+               throw new Error('Libreria pdf-parse non caricata correttamente');
+            }
+
             testoAccumulato += data.text + '\n';
          } else if (ext === '.docx') {
             console.log(`📖 Leggendo WORD: ${file}`);
@@ -61,7 +68,7 @@ async function caricaDocumenti() {
 
 // ROTTE EXPRESS
 app.get('/', (req, res) => {
-   res.send('🚀 Server Online! In attesa di richieste su /chiedi');
+   res.send('🚀 Chatbot Server Online!');
 });
 
 app.post('/chiedi', async (req, res) => {
@@ -69,29 +76,27 @@ app.post('/chiedi', async (req, res) => {
       const { messaggio } = req.body;
       if (!messaggio) return res.status(400).json({ errore: 'Messaggio vuoto' });
 
-      const prompt = `Sei l'assistente ufficiale di LD Marketplace. Rispondi basandoti ESCLUSIVAMENTE sulla documentazione fornita qui sotto. Se non trovi la risposta, dillo gentilmente.
-
-DOCUMENTAZIONE DI RIFERIMENTO:
+      const prompt = `Sei l'assistente ufficiale di LD Marketplace. Rispondi usando queste info.
+        
+DOCUMENTAZIONE:
 ${conoscenzaIntegrata}
 
-DOMANDA UTENTE:
-${messaggio}`;
+DOMANDA: ${messaggio}`;
 
       const result = await model.generateContent(prompt);
-      const response = await result.response;
-      res.json({ risposta: response.text() });
+      res.json({ risposta: result.response.text() });
    } catch (error) {
-      console.error('Errore Gemini:', error.message);
-      res.status(500).json({ errore: 'Il bot ha avuto un problema nel generare la risposta.' });
+      console.error('Errore generazione:', error.message);
+      res.status(500).json({ errore: 'Errore durante la risposta.' });
    }
 });
 
-// AVVIO SERVER DOPO CARICAMENTO DATI
+// AVVIO DOPO CARICAMENTO
 const PORT = process.env.PORT || 10000;
 caricaDocumenti().then((testo) => {
    conoscenzaIntegrata = testo;
    app.listen(PORT, '0.0.0.0', () => {
-      console.log(`✅ Server pronto sulla porta ${PORT}`);
-      console.log(`📝 Documentazione caricata: ${conoscenzaIntegrata.length} caratteri.`);
+      console.log(`✅ Server attivo sulla porta ${PORT}`);
+      console.log(`📝 Conoscenza pronta (${conoscenzaIntegrata.length} caratteri)`);
    });
 });
