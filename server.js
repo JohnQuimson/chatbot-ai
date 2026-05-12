@@ -3,26 +3,34 @@ const fs = require('fs');
 const path = require('path');
 const express = require('express');
 const cors = require('cors');
-const pdf = require('pdf-parse');
 const mammoth = require('mammoth');
+const PDFParser = require('pdf2json'); // Nuova libreria
 require('dotenv').config();
 
 const app = express();
 app.use(cors());
 app.use(express.json());
 
-// CONFIGURAZIONE GEMINI
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-const model = genAI.getGenerativeModel({ model: 'gemini-3.1-flash-lite' }); // Usa il modello che preferisci, es: gemini-3.1-flash-lite
+const model = genAI.getGenerativeModel({ model: 'gemini-3.1-flash-lite' });
 
 let conoscenzaIntegrata = '';
 
-// FUNZIONE PER CARICARE TUTTI I DOCUMENTI
+// Funzione specifica per leggere i PDF in modo asincrono
+function parsePDF(filePath) {
+   return new Promise((resolve, reject) => {
+      const pdfParser = new PDFParser(this, 1); // "1" estrae solo il testo senza formattazione pesante
+      pdfParser.on('pdfParser_dataError', (errData) => reject(errData.parserError));
+      pdfParser.on('pdfParser_dataReady', (pdfData) => {
+         resolve(pdfParser.getRawTextContent());
+      });
+      pdfParser.loadPDF(filePath);
+   });
+}
+
 async function caricaDocumenti() {
    const directoryPath = path.join(__dirname, 'documentazione');
-
    if (!fs.existsSync(directoryPath)) {
-      console.log('⚠️ Cartella documentazione non trovata, la creo...');
       fs.mkdirSync(directoryPath);
       return '';
    }
@@ -36,67 +44,42 @@ async function caricaDocumenti() {
 
       try {
          if (ext === '.txt') {
-            console.log(`📖 Leggendo TXT: ${file}`);
             testoAccumulato += fs.readFileSync(filePath, 'utf8') + '\n';
-         } else if (ext === '.pdf') {
-            console.log(`📖 Leggendo PDF: ${file}`);
-            const dataBuffer = fs.readFileSync(filePath);
-
-            // FIX CRUCIALE: Gestione del pacchetto pdf-parse come funzione o oggetto
-            let data;
-            if (typeof pdf === 'function') {
-               data = await pdf(dataBuffer);
-            } else if (pdf.default && typeof pdf.default === 'function') {
-               data = await pdf.default(dataBuffer);
-            } else {
-               throw new Error('Libreria pdf-parse non caricata correttamente');
-            }
-
-            testoAccumulato += data.text + '\n';
+            console.log(`✅ TXT caricato: ${file}`);
          } else if (ext === '.docx') {
-            console.log(`📖 Leggendo WORD: ${file}`);
             const dataBuffer = fs.readFileSync(filePath);
             const result = await mammoth.extractRawText({ buffer: dataBuffer });
             testoAccumulato += result.value + '\n';
+            console.log(`✅ DOCX caricato: ${file}`);
+         } else if (ext === '.pdf') {
+            const testoPdf = await parsePDF(filePath);
+            testoAccumulato += testoPdf + '\n';
+            console.log(`✅ PDF caricato: ${file}`);
          }
       } catch (err) {
-         console.error(`❌ Errore durante la lettura di ${file}:`, err.message);
+         console.error(`❌ Errore su ${file}:`, err.message);
       }
    }
    return testoAccumulato;
 }
 
-// ROTTE EXPRESS
-app.get('/', (req, res) => {
-   res.send('🚀 Chatbot Server Online!');
-});
-
+// Rotta per la chat
 app.post('/chiedi', async (req, res) => {
    try {
       const { messaggio } = req.body;
-      if (!messaggio) return res.status(400).json({ errore: 'Messaggio vuoto' });
-
-      const prompt = `Sei l'assistente ufficiale di LD Marketplace. Rispondi usando queste info.
-        
-DOCUMENTAZIONE:
-${conoscenzaIntegrata}
-
-DOMANDA: ${messaggio}`;
-
+      const prompt = `Usa queste info per rispondere:\n${conoscenzaIntegrata}\n\nDomanda: ${messaggio}`;
       const result = await model.generateContent(prompt);
       res.json({ risposta: result.response.text() });
    } catch (error) {
-      console.error('Errore generazione:', error.message);
-      res.status(500).json({ errore: 'Errore durante la risposta.' });
+      res.status(500).json({ errore: error.message });
    }
 });
 
-// AVVIO DOPO CARICAMENTO
-const PORT = process.env.PORT || 10000;
+const PORT = process.env.PORT || 3000;
 caricaDocumenti().then((testo) => {
    conoscenzaIntegrata = testo;
-   app.listen(PORT, '0.0.0.0', () => {
-      console.log(`✅ Server attivo sulla porta ${PORT}`);
-      console.log(`📝 Conoscenza pronta (${conoscenzaIntegrata.length} caratteri)`);
+   app.listen(PORT, () => {
+      console.log(`🚀 Server pronto su http://localhost:${PORT}`);
+      console.log(`📚 Memoria bot: ${conoscenzaIntegrata.length} caratteri.`);
    });
 });
