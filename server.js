@@ -3,7 +3,7 @@ const fs = require('fs');
 const path = require('path');
 const express = require('express');
 const cors = require('cors');
-const pdf = require('pdf-parse/lib/pdf-parse.js');
+const pdf = require('pdf-parse'); // Importazione standard
 const mammoth = require('mammoth');
 require('dotenv').config();
 
@@ -11,15 +11,22 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
+// CONFIGURAZIONE GEMINI
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+// Usiamo il modello che hai confermato funzionante
 const model = genAI.getGenerativeModel({ model: 'gemini-3.1-flash-lite' });
 
 let conoscenzaIntegrata = '';
 
-// Funzione magica per leggere tutto
+// FUNZIONE PER CARICARE TUTTI I DOCUMENTI
 async function caricaDocumenti() {
    const directoryPath = path.join(__dirname, 'documentazione');
-   if (!fs.existsSync(directoryPath)) return 'Nessun documento trovato.';
+
+   // Se la cartella non esiste, la crea (evita crash)
+   if (!fs.existsSync(directoryPath)) {
+      fs.mkdirSync(directoryPath);
+      return 'Cartella documentazione creata. Aggiungi file per istruire il bot.';
+   }
 
    const files = fs.readdirSync(directoryPath);
    let testoAccumulato = '';
@@ -28,42 +35,63 @@ async function caricaDocumenti() {
       const filePath = path.join(directoryPath, file);
       const ext = path.extname(file).toLowerCase();
 
-      console.log(`📖 Leggendo: ${file}...`);
-
-      if (ext === '.txt') {
-         testoAccumulato += fs.readFileSync(filePath, 'utf8') + '\n';
-      } else if (ext === '.pdf') {
-         const dataBuffer = fs.readFileSync(filePath);
-         const data = await pdf(dataBuffer);
-         testoAccumulato += data.text + '\n';
-      } else if (ext === '.docx') {
-         const dataBuffer = fs.readFileSync(filePath);
-         const result = await mammoth.extractRawText({ buffer: dataBuffer });
-         testoAccumulato += result.value + '\n';
+      try {
+         if (ext === '.txt') {
+            console.log(`📖 Leggendo TXT: ${file}`);
+            testoAccumulato += fs.readFileSync(filePath, 'utf8') + '\n';
+         } else if (ext === '.pdf') {
+            console.log(`📖 Leggendo PDF: ${file}`);
+            const dataBuffer = fs.readFileSync(filePath);
+            // Fix per il TypeError: gestisce sia esportazione diretta che .default
+            const parsePdf = typeof pdf === 'function' ? pdf : pdf.default;
+            const data = await parsePdf(dataBuffer);
+            testoAccumulato += data.text + '\n';
+         } else if (ext === '.docx') {
+            console.log(`📖 Leggendo WORD: ${file}`);
+            const dataBuffer = fs.readFileSync(filePath);
+            const result = await mammoth.extractRawText({ buffer: dataBuffer });
+            testoAccumulato += result.value + '\n';
+         }
+      } catch (err) {
+         console.error(`❌ Errore durante la lettura di ${file}:`, err.message);
       }
    }
    return testoAccumulato;
 }
 
-// Avvio del server solo dopo aver letto i file
-caricaDocumenti().then((testo) => {
-   conoscenzaIntegrata = testo;
-   const PORT = process.env.PORT || 10000;
-   app.listen(PORT, '0.0.0.0', () => {
-      console.log(`🚀 Bot online con documentazione caricata!`);
-   });
+// ROTTE EXPRESS
+app.get('/', (req, res) => {
+   res.send('🚀 Server Online! In attesa di richieste su /chiedi');
 });
 
 app.post('/chiedi', async (req, res) => {
    try {
       const { messaggio } = req.body;
-      // Inseriamo tutta la conoscenza nel prompt
-      const prompt = `Sei un assistente esperto. Usa le seguenti informazioni per rispondere.\n\nCONOSCENZA:\n${conoscenzaIntegrata}\n\nUTENTE: ${messaggio}`;
+      if (!messaggio) return res.status(400).json({ errore: 'Messaggio vuoto' });
+
+      const prompt = `Sei l'assistente ufficiale di LD Marketplace. Rispondi basandoti ESCLUSIVAMENTE sulla documentazione fornita qui sotto. Se non trovi la risposta, dillo gentilmente.
+
+DOCUMENTAZIONE DI RIFERIMENTO:
+${conoscenzaIntegrata}
+
+DOMANDA UTENTE:
+${messaggio}`;
 
       const result = await model.generateContent(prompt);
-      res.json({ risposta: result.response.text() });
+      const response = await result.response;
+      res.json({ risposta: response.text() });
    } catch (error) {
-      console.error(error);
-      res.status(500).json({ errore: 'Errore nella generazione.' });
+      console.error('Errore Gemini:', error.message);
+      res.status(500).json({ errore: 'Il bot ha avuto un problema nel generare la risposta.' });
    }
+});
+
+// AVVIO SERVER DOPO CARICAMENTO DATI
+const PORT = process.env.PORT || 10000;
+caricaDocumenti().then((testo) => {
+   conoscenzaIntegrata = testo;
+   app.listen(PORT, '0.0.0.0', () => {
+      console.log(`✅ Server pronto sulla porta ${PORT}`);
+      console.log(`📝 Documentazione caricata: ${conoscenzaIntegrata.length} caratteri.`);
+   });
 });
