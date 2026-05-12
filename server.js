@@ -1,23 +1,36 @@
 const { GoogleGenerativeAI } = require('@google/generative-ai');
 const fs = require('fs');
+const express = require('express');
+const cors = require('cors'); // AGGIUNTO
 require('dotenv').config();
 
-const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-const PORT = process.env.PORT || 3000;
+const app = express();
+// Abilitiamo CORS così WordPress può comunicare con Render
+app.use(cors());
+app.use(express.json());
 
-// Usiamo il modello che abbiamo appena visto essere disponibile nella tua lista
-const model = genAI.getGenerativeModel({ model: 'gemini-2.5-flash' });
+const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+const PORT = process.env.PORT || 10000; // Render usa porte alte
+
+// Modello corretto: 'gemini-1.5-flash' o 'gemini-2.0-flash-exp'
+const model = genAI.getGenerativeModel({ model: 'gemini-1.5-flash' });
 
 const datiDocumento = fs.readFileSync('conoscenza.txt', 'utf8');
 
-// Rotta per la chat
-const express = require('express');
-const app = express();
-app.use(express.json());
+// Rotta di cortesia per testare il browser
+app.get('/', (req, res) => {
+   res.send('🚀 Server Chatbot Attivo!');
+});
 
+// Rotta per la chat
 app.post('/chiedi', async (req, res) => {
    try {
-      const prompt = `INFO DI RIFERIMENTO: ${datiDocumento}\n\nDOMANDA: ${req.body.messaggio}`;
+      const { messaggio } = req.body;
+      if (!messaggio) {
+         return res.status(400).json({ errore: 'Messaggio mancante' });
+      }
+
+      const prompt = `INFO DI RIFERIMENTO: ${datiDocumento}\n\nDOMANDA: ${messaggio}`;
 
       const result = await model.generateContent(prompt);
       const response = await result.response;
@@ -29,4 +42,7 @@ app.post('/chiedi', async (req, res) => {
    }
 });
 
-app.listen(PORT, () => console.log(`🚀 Server finalmente pronto su http://localhost:${PORT}`));
+// Importante: ascoltare su 0.0.0.0
+app.listen(PORT, '0.0.0.0', () => {
+   console.log(`🚀 Server in ascolto sulla porta ${PORT}`);
+});
