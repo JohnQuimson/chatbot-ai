@@ -3,7 +3,7 @@ const fs = require('fs');
 const path = require('path');
 const express = require('express');
 const cors = require('cors');
-const pdf = require('pdf-parse');
+const pdf = require('pdf-parse/lib/pdf-parse.js');
 const mammoth = require('mammoth');
 require('dotenv').config();
 
