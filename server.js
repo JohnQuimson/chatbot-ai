@@ -13,7 +13,7 @@ const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 const PORT = process.env.PORT || 10000; // Render usa porte alte
 
 // Modello corretto: 'gemini-1.5-flash' o 'gemini-2.0-flash-exp'
-const model = genAI.getGenerativeModel({ model: 'gemini-1.5-flash' });
+const model = genAI.getGenerativeModel({ model: 'gemini-3.1-flash-lite' });
 
 const datiDocumento = fs.readFileSync('conoscenza.txt', 'utf8');
 
