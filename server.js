@@ -49,7 +49,7 @@ ${messaggio}`;
          return res.status(401).json({ errore: "L'API Key di Gemini non è valida." });
       }
 
-      res.status(500).json({ errore: 'Il server ha riscontrato un problema.' });
+      res.status(500).json({ errore: 'Il server ha riscontrato un problema. Riprova.' });
    }
 });
 
