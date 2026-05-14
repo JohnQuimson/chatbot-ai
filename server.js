@@ -1,85 +1,64 @@
 const { GoogleGenerativeAI } = require('@google/generative-ai');
-const fs = require('fs');
-const path = require('path');
 const express = require('express');
 const cors = require('cors');
-const mammoth = require('mammoth');
-const PDFParser = require('pdf2json'); // Nuova libreria
 require('dotenv').config();
 
 const app = express();
 app.use(cors());
 app.use(express.json());
 
-const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-const model = genAI.getGenerativeModel({ model: 'gemini-3.1-flash-lite' });
-
-let conoscenzaIntegrata = '';
-
-// Funzione specifica per leggere i PDF in modo asincrono
-function parsePDF(filePath) {
-   return new Promise((resolve, reject) => {
-      const pdfParser = new PDFParser(this, 1); // "1" estrae solo il testo senza formattazione pesante
-      pdfParser.on('pdfParser_dataError', (errData) => reject(errData.parserError));
-      pdfParser.on('pdfParser_dataReady', (pdfData) => {
-         resolve(pdfParser.getRawTextContent());
-      });
-      pdfParser.loadPDF(filePath);
-   });
-}
-
-async function caricaDocumenti() {
-   const directoryPath = path.join(__dirname, 'documentazione');
-   if (!fs.existsSync(directoryPath)) {
-      fs.mkdirSync(directoryPath);
-      return '';
-   }
-
-   const files = fs.readdirSync(directoryPath);
-   let testoAccumulato = '';
-
-   for (const file of files) {
-      const filePath = path.join(directoryPath, file);
-      const ext = path.extname(file).toLowerCase();
-
-      try {
-         if (ext === '.txt') {
-            testoAccumulato += fs.readFileSync(filePath, 'utf8') + '\n';
-            console.log(`✅ TXT caricato: ${file}`);
-         } else if (ext === '.docx') {
-            const dataBuffer = fs.readFileSync(filePath);
-            const result = await mammoth.extractRawText({ buffer: dataBuffer });
-            testoAccumulato += result.value + '\n';
-            console.log(`✅ DOCX caricato: ${file}`);
-         } else if (ext === '.pdf') {
-            const testoPdf = await parsePDF(filePath);
-            testoAccumulato += testoPdf + '\n';
-            console.log(`✅ PDF caricato: ${file}`);
-         }
-      } catch (err) {
-         console.error(`❌ Errore su ${file}:`, err.message);
-      }
-   }
-   return testoAccumulato;
-}
-
-// Rotta per la chat
+// Rotta per la chat multi-cliente
 app.post('/chiedi', async (req, res) => {
    try {
-      const { messaggio } = req.body;
-      const prompt = `Usa queste info per rispondere:\n${conoscenzaIntegrata}\n\nDomanda: ${messaggio}`;
+      const { messaggio, clienteKey, contestoPrivato } = req.body;
+
+      // Validazione minima
+      if (!clienteKey) {
+         return res.status(400).json({ errore: "Manca l'API Key del cliente." });
+      }
+      if (!messaggio) {
+         return res.status(400).json({ errore: 'Messaggio vuoto.' });
+      }
+
+      // Inizializziamo Gemini dinamicamente con la chiave del cliente
+      const genAI = new GoogleGenerativeAI(clienteKey);
+
+      // Usiamo il modello richiesto
+      const model = genAI.getGenerativeModel({ model: 'gemini-3.1-flash-lite' });
+
+      // Costruiamo il prompt usando il contesto inviato dal plugin WordPress
+      const prompt = `Sei l'assistente IA ufficiale del sito. 
+Rispondi in modo professionale basandoti esclusivamente sulle informazioni fornite qui sotto. 
+Se la risposta non è presente nei dati, consiglia gentilmente di contattare l'assistenza umana.
+
+INFORMAZIONI DI RIFERIMENTO:
+${contestoPrivato || 'Nessuna istruzione specifica fornita.'}
+
+DOMANDA UTENTE:
+${messaggio}`;
+
       const result = await model.generateContent(prompt);
-      res.json({ risposta: result.response.text() });
+      const response = await result.response;
+
+      res.json({ risposta: response.text() });
    } catch (error) {
-      res.status(500).json({ errore: error.message });
+      console.error('Errore durante la richiesta:', error.message);
+
+      // Gestione errori specifica per chiavi non valide
+      if (error.message.includes('API_KEY_INVALID')) {
+         return res.status(401).json({ errore: "L'API Key di Gemini non è valida." });
+      }
+
+      res.status(500).json({ errore: 'Il server ha riscontrato un problema.' });
    }
 });
 
+// Home page di cortesia
+app.get('/', (req, res) => {
+   res.send('🚀 Gateway Multi-Cliente per Gemini attivo.');
+});
+
 const PORT = process.env.PORT || 3000;
-caricaDocumenti().then((testo) => {
-   conoscenzaIntegrata = testo;
-   app.listen(PORT, () => {
-      console.log(`🚀 Server pronto su http://localhost:${PORT}`);
-      console.log(`📚 Memoria bot: ${conoscenzaIntegrata.length} caratteri.`);
-   });
+app.listen(PORT, () => {
+   console.log(`🚀 Server Multi-Cliente pronto sulla porta ${PORT}`);
 });
