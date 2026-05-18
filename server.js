@@ -12,7 +12,6 @@ app.use(express.json());
 function caricaWhitelist() {
    try {
       const filePath = path.join(__dirname, 'whitelist.txt');
-      // Se il file non esiste, lo crea vuoto per evitare crash
       if (!fs.existsSync(filePath)) {
          fs.writeFileSync(filePath, '', 'utf-8');
          return [];
@@ -32,9 +31,6 @@ function caricaWhitelist() {
 const corsOptions = {
    origin: function (origin, callback) {
       const whitelist = caricaWhitelist();
-
-      // Nel protocollo HTTP, le richieste inviate da browser hanno sempre un 'origin'.
-      // !origin permette l'accesso a strumenti di test backend (come Postman) o server-to-server.
       if (!origin || whitelist.indexOf(origin) !== -1) {
          callback(null, true);
       } else {
@@ -44,7 +40,7 @@ const corsOptions = {
    },
 };
 
-// Applica il middleware CORS con le opzioni protette
+// middleware CORS
 app.use(cors(corsOptions));
 
 // Rotta per la chat multi-cliente
@@ -52,7 +48,7 @@ app.post('/chiedi', async (req, res) => {
    try {
       const { messaggio, clienteKey, contestoPrivato } = req.body;
 
-      // Validazione minima
+      // Validazione
       if (!clienteKey) {
          return res.status(400).json({ errore: "Manca l'API Key del cliente." });
       }
@@ -60,10 +56,9 @@ app.post('/chiedi', async (req, res) => {
          return res.status(400).json({ errore: 'Messaggio vuoto.' });
       }
 
-      // Inizializziamo Gemini dinamicamente con la chiave del cliente
+      // Inizializzazione Gemini con la chiave del cliente
       const genAI = new GoogleGenerativeAI(clienteKey);
 
-      // Usiamo il modello richiesto
       const model = genAI.getGenerativeModel({ model: 'gemini-3.1-flash-lite' });
 
       // Costruiamo il prompt usando il contesto inviato dal plugin WordPress
@@ -93,7 +88,7 @@ ${messaggio}`;
    }
 });
 
-// Home page di cortesia
+// Homepage
 app.get('/', (req, res) => {
    res.send('🚀 Gateway Multi-Cliente per Gemini attivo.');
 });
