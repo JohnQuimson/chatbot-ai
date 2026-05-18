@@ -1,11 +1,51 @@
 const { GoogleGenerativeAI } = require('@google/generative-ai');
 const express = require('express');
 const cors = require('cors');
+const fs = require('fs');
+const path = require('path');
 require('dotenv').config();
 
 const app = express();
-app.use(cors());
 app.use(express.json());
+
+// Funzione interna per leggere e ripulire la whitelist dal file di testo
+function caricaWhitelist() {
+   try {
+      const filePath = path.join(__dirname, 'whitelist.txt');
+      // Se il file non esiste, lo crea vuoto per evitare crash
+      if (!fs.existsSync(filePath)) {
+         fs.writeFileSync(filePath, '', 'utf-8');
+         return [];
+      }
+      const data = fs.readFileSync(filePath, 'utf-8');
+      return data
+         .split('\n')
+         .map((line) => line.trim())
+         .filter((line) => line.length > 0);
+   } catch (error) {
+      console.error('Errore durante la lettura di whitelist.txt:', error.message);
+      return [];
+   }
+}
+
+// Configurazione CORS con controllo dinamico basato sul file di testo
+const corsOptions = {
+   origin: function (origin, callback) {
+      const whitelist = caricaWhitelist();
+
+      // Nel protocollo HTTP, le richieste inviate da browser hanno sempre un 'origin'.
+      // !origin permette l'accesso a strumenti di test backend (come Postman) o server-to-server.
+      if (!origin || whitelist.indexOf(origin) !== -1) {
+         callback(null, true);
+      } else {
+         console.log(`🚫 Chiamata bloccata da CORS per l'origine: ${origin}`);
+         callback(new Error('Dominio non autorizzato dal sistema di sicurezza.'));
+      }
+   },
+};
+
+// Applica il middleware CORS con le opzioni protette
+app.use(cors(corsOptions));
 
 // Rotta per la chat multi-cliente
 app.post('/chiedi', async (req, res) => {
