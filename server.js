@@ -19,7 +19,7 @@ if (!supabaseUrl || !supabaseKey) {
 }
 const supabase = createClient(supabaseUrl, supabaseKey);
 
-// Funzione interna per leggere e ripulire la whitelist dal file di testo
+// Funzione interna per leggere e ripulire la whitelist
 function caricaWhitelist() {
    try {
       const filePath = path.join(__dirname, 'whitelist.txt');
@@ -38,7 +38,7 @@ function caricaWhitelist() {
    }
 }
 
-// Configurazione CORS con controllo dinamico basato sul file di testo
+// Configurazione CORS
 const corsOptions = {
    origin: function (origin, callback) {
       const whitelist = caricaWhitelist();
@@ -52,33 +52,6 @@ const corsOptions = {
 };
 
 app.use(cors(corsOptions));
-
-// =========================================================================
-// FUNZIONE DI SUPPORTO: Genera embedding chiamando direttamente l'API v1
-// =========================================================================
-// =========================================================================
-// FUNZIONE DI SUPPORTO: Genera embedding chiamando direttamente l'API v1
-// =========================================================================
-async function ottieniEmbeddingDiretto(testo, apiKey) {
-   // Abbiamo cambiato 'text-embedding-004' con 'embedding-001'
-   const url = `https://generativelanguage.googleapis.com/v1/models/embedding-001:embedContent?key=${apiKey}`;
-
-   const response = await fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-         content: { parts: [{ text: testo }] },
-      }),
-   });
-
-   const data = await response.json();
-
-   if (!response.ok) {
-      throw new Error(data.error?.message || `Errore HTTP generico: ${response.status}`);
-   }
-
-   return data.embedding.values;
-}
 
 // =========================================================================
 // ROTTA: Riceve il testo completo da WP, lo vettorizza e lo salva
@@ -96,17 +69,22 @@ app.post('/carica-documentazione', async (req, res) => {
       const regex = new RegExp(`.{1,${chunk_size}}(\\s|$)|.{1,${chunk_size}}`, 'g');
       const chunks = testoCompleto.match(regex) || [];
 
-      // Svuota la vecchia documentazione di QUESTO specifico cliente per evitare duplicati
+      // Inizializziamo l'SDK con il nuovo modello
+      const genAI = new GoogleGenerativeAI(clienteKey);
+      const embeddingModel = genAI.getGenerativeModel({ model: 'text-embedding-005' });
+
+      // Svuota la vecchia documentazione del cliente per evitare duplicati
       await supabase.from('documenti_clienti').delete().eq('cliente_id', clienteId);
 
       const righeDaInserire = [];
 
-      // 2. Generiamo l'embedding usando la nostra funzione fetch sicura
+      // 2. Generiamo l'embedding per ogni blocco
       for (const chunk of chunks) {
          const testoPulito = chunk.trim();
          if (testoPulito.length === 0) continue;
 
-         const embeddingVettoriale = await ottieniEmbeddingDiretto(testoPulito, clienteKey);
+         const embedResult = await embeddingModel.embedContent(testoPulito);
+         const embeddingVettoriale = embedResult.embedding.values;
 
          righeDaInserire.push({
             cliente_id: clienteId,
@@ -125,7 +103,7 @@ app.post('/carica-documentazione', async (req, res) => {
       });
    } catch (error) {
       console.error('Errore durante il caricamento della documentazione:', error.message);
-      res.status(500).json({ errore: `Errore interno durante la vettorizzazione: ${error.message}` });
+      res.status(500).json({ errore: `Errore interno: ${error.message}` });
    }
 });
 
@@ -140,8 +118,12 @@ app.post('/chiedi', async (req, res) => {
          return res.status(400).json({ errore: 'Dati in ingresso mancanti o vuoti.' });
       }
 
-      // 1. Trasformiamo la domanda dell'utente in un vettore usando il fetch diretto
-      const queryEmbedding = await ottieniEmbeddingDiretto(messaggio, clienteKey);
+      const genAI = new GoogleGenerativeAI(clienteKey);
+      const embeddingModel = genAI.getGenerativeModel({ model: 'text-embedding-005' });
+
+      // 1. Trasformiamo la domanda dell'utente in un vettore
+      const embedResult = await embeddingModel.embedContent(messaggio);
+      const queryEmbedding = embedResult.embedding.values;
 
       // 2. Interroghiamo Supabase tramite la funzione SQL rpc
       const { data: documentiTrovati, error: dbError } = await supabase.rpc('cerca_documenti', {
@@ -158,9 +140,8 @@ app.post('/chiedi', async (req, res) => {
             ? documentiTrovati.map((doc) => doc.contenuto).join('\n\n')
             : 'Nessuna informazione specifica trovata nella documentazione.';
 
-      // 3. Inizializziamo il modello di chat per la risposta testuale (qui l'SDK va benissimo)
-      const genAI = new GoogleGenerativeAI(clienteKey);
-      const model = genAI.getGenerativeModel({ model: 'gemini-3.1-flash-lite' });
+      // 3. Generiamo la risposta con il velocissimo Gemini 2.5 Flash
+      const model = genAI.getGenerativeModel({ model: 'gemini-2.5-flash' });
 
       const prompt = `Sei l'assistente IA ufficiale del sito. 
 Rispondi in modo professionale basandoti esclusivamente sulle informazioni fornite qui sotto. 
@@ -184,7 +165,7 @@ ${messaggio}`;
 
 // Homepage di controllo
 app.get('/', (req, res) => {
-   res.send('🚀 Gateway Multi-Cliente RAG con Fetch Diretto attivo.');
+   res.send('🚀 Gateway Multi-Cliente RAG pronto.');
 });
 
 const PORT = process.env.PORT || 3000;
