@@ -67,7 +67,7 @@ app.post('/carica-documentazione', async (req, res) => {
 
       const genAI = new GoogleGenerativeAI(clienteKey);
       // text-embedding-004 è il modello di Gemini per generare vettori (embeddings)
-      const embeddingModel = genAI.getGenerativeModel({ model: 'models/text-embedding-004' });
+      const embeddingModel = genAI.getGenerativeModel({ model: 'embedding-001' });
 
       // Svuota l'eventuale vecchia documentazione di QUESTO specifico cliente per evitare duplicati
       await supabase.from('documenti_clienti').delete().eq('cliente_id', clienteId);
