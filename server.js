@@ -56,9 +56,12 @@ app.use(cors(corsOptions));
 // =========================================================================
 // FUNZIONE DI SUPPORTO: Genera embedding chiamando direttamente l'API v1
 // =========================================================================
+// =========================================================================
+// FUNZIONE DI SUPPORTO: Genera embedding chiamando direttamente l'API v1
+// =========================================================================
 async function ottieniEmbeddingDiretto(testo, apiKey) {
-   // Forziamo l'URL stabile v1 e il modello text-embedding-004
-   const url = `https://generativelanguage.googleapis.com/v1/models/text-embedding-004:embedContent?key=${apiKey}`;
+   // Abbiamo cambiato 'text-embedding-004' con 'embedding-001'
+   const url = `https://generativelanguage.googleapis.com/v1/models/embedding-001:embedContent?key=${apiKey}`;
 
    const response = await fetch(url, {
       method: 'POST',
