@@ -9,17 +9,17 @@ require('dotenv').config();
 const app = express();
 app.use(express.json());
 
-// Inizializzazione del client Supabase con controllo di sicurezza
+// Inizializzazione del client Supabase
 const supabaseUrl = process.env.SUPABASE_URL;
 const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
 if (!supabaseUrl || !supabaseKey) {
-   console.error("❌ ERRORE: Configurazione Supabase mancante nelle variabili d'ambiente!");
+   console.error('❌ ERRORE: Configurazione Supabase mancante!');
    process.exit(1);
 }
 const supabase = createClient(supabaseUrl, supabaseKey);
 
-// Funzione interna per leggere e ripulire la whitelist
+// Funzione interna per leggere la whitelist
 function caricaWhitelist() {
    try {
       const filePath = path.join(__dirname, 'whitelist.txt');
@@ -33,58 +33,81 @@ function caricaWhitelist() {
          .map((line) => line.trim())
          .filter((line) => line.length > 0);
    } catch (error) {
-      console.error('Errore durante la lettura di whitelist.txt:', error.message);
+      console.error('Errore lettura whitelist:', error.message);
       return [];
    }
 }
 
 // Configurazione CORS
-const corsOptions = {
-   origin: function (origin, callback) {
-      const whitelist = caricaWhitelist();
-      if (!origin || whitelist.indexOf(origin) !== -1) {
-         callback(null, true);
-      } else {
-         console.log(`🚫 Chiamata bloccata da CORS per l'origine: ${origin}`);
-         callback(new Error('Dominio non autorizzato dal sistema di sicurezza.'));
-      }
-   },
-};
-
-app.use(cors(corsOptions));
+app.use(
+   cors({
+      origin: function (origin, callback) {
+         const whitelist = caricaWhitelist();
+         if (!origin || whitelist.indexOf(origin) !== -1) {
+            callback(null, true);
+         } else {
+            console.log(`🚫 Bloccato da CORS: ${origin}`);
+            callback(new Error('Dominio non autorizzato.'));
+         }
+      },
+   }),
+);
 
 // =========================================================================
-// ROTTA: Riceve il testo completo da WP, lo vettorizza e lo salva
+// FUNZIONE DI SUPPORTO: Chiamata HTTP diretta senza bug di SDK
+// =========================================================================
+async function ottieniEmbeddingDiretto(testo, apiKey) {
+   // URL forzato sulla versione STABILE v1 con text-embedding-004 (768 dimensioni)
+   const url = `https://generativelanguage.googleapis.com/v1/models/text-embedding-004:embedContent?key=${apiKey}`;
+
+   const response = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+         content: { parts: [{ text: testo }] },
+      }),
+   });
+
+   const data = await response.json();
+
+   if (!response.ok) {
+      throw new Error(data.error?.message || `Errore HTTP: ${response.status}`);
+   }
+
+   if (!data.embedding?.values) {
+      throw new Error('Risposta di embedding malformata da parte di Google.');
+   }
+
+   return data.embedding.values;
+}
+
+// =========================================================================
+// ROTTA: Carica Documentazione
 // =========================================================================
 app.post('/carica-documentazione', async (req, res) => {
    try {
       const { testoCompleto, clienteKey, clienteId } = req.body;
 
       if (!testoCompleto || !clienteKey || !clienteId) {
-         return res.status(400).json({ errore: 'Dati mancanti (richiesti: testoCompleto, clienteKey, clienteId).' });
+         return res.status(400).json({ errore: 'Dati mancanti (testoCompleto, clienteKey, clienteId).' });
       }
 
-      // 1. CHUNKING: Dividiamo il testo in blocchi di circa 800 caratteri
+      // Dividiamo il testo in blocchi
       const chunk_size = 800;
       const regex = new RegExp(`.{1,${chunk_size}}(\\s|$)|.{1,${chunk_size}}`, 'g');
       const chunks = testoCompleto.match(regex) || [];
 
-      // Inizializziamo l'SDK con il nuovo modello
-      const genAI = new GoogleGenerativeAI(clienteKey);
-      const embeddingModel = genAI.getGenerativeModel({ model: 'text-embedding-005' });
-
-      // Svuota la vecchia documentazione del cliente per evitare duplicati
+      // Svuota i vecchi dati del cliente
       await supabase.from('documenti_clienti').delete().eq('cliente_id', clienteId);
 
       const righeDaInserire = [];
 
-      // 2. Generiamo l'embedding per ogni blocco
+      // Generiamo i vettori con la chiamata diretta v1
       for (const chunk of chunks) {
          const testoPulito = chunk.trim();
          if (testoPulito.length === 0) continue;
 
-         const embedResult = await embeddingModel.embedContent(testoPulito);
-         const embeddingVettoriale = embedResult.embedding.values;
+         const embeddingVettoriale = await ottieniEmbeddingDiretto(testoPulito, clienteKey);
 
          righeDaInserire.push({
             cliente_id: clienteId,
@@ -93,7 +116,7 @@ app.post('/carica-documentazione', async (req, res) => {
          });
       }
 
-      // 3. Salvataggio bulk su Supabase
+      // Salva su Supabase
       const { error } = await supabase.from('documenti_clienti').insert(righeDaInserire);
       if (error) throw error;
 
@@ -102,30 +125,26 @@ app.post('/carica-documentazione', async (req, res) => {
          messaggio: `Documentazione sincronizzata. Generati ${righeDaInserire.length} blocchi.`,
       });
    } catch (error) {
-      console.error('Errore durante il caricamento della documentazione:', error.message);
-      res.status(500).json({ errore: `Errore interno: ${error.message}` });
+      console.error('Errore caricamento documentazione:', error.message);
+      res.status(500).json({ errore: error.message });
    }
 });
 
 // =========================================================================
-// ROTTA CHAT: Estrae solo il contesto utile da Supabase e risponde
+// ROTTA CHAT: Risposta con Gemini 2.5 Flash
 // =========================================================================
 app.post('/chiedi', async (req, res) => {
    try {
       const { messaggio, clienteKey, clienteId } = req.body;
 
       if (!clienteKey || !clienteId || !messaggio) {
-         return res.status(400).json({ errore: 'Dati in ingresso mancanti o vuoti.' });
+         return res.status(400).json({ errore: 'Dati in ingresso mancanti.' });
       }
 
-      const genAI = new GoogleGenerativeAI(clienteKey);
-      const embeddingModel = genAI.getGenerativeModel({ model: 'text-embedding-005' });
+      // Vettorizziamo la domanda con la chiamata diretta v1
+      const queryEmbedding = await ottieniEmbeddingDiretto(messaggio, clienteKey);
 
-      // 1. Trasformiamo la domanda dell'utente in un vettore
-      const embedResult = await embeddingModel.embedContent(messaggio);
-      const queryEmbedding = embedResult.embedding.values;
-
-      // 2. Interroghiamo Supabase tramite la funzione SQL rpc
+      // Cerchiamo il contesto su Supabase
       const { data: documentiTrovati, error: dbError } = await supabase.rpc('cerca_documenti', {
          query_embedding: queryEmbedding,
          match_threshold: 0.2,
@@ -140,7 +159,8 @@ app.post('/chiedi', async (req, res) => {
             ? documentiTrovati.map((doc) => doc.contenuto).join('\n\n')
             : 'Nessuna informazione specifica trovata nella documentazione.';
 
-      // 3. Generiamo la risposta con il velocissimo Gemini 2.5 Flash
+      // Per la generazione del testo usiamo l'SDK con Gemini 2.5 Flash (che funziona benissimo)
+      const genAI = new GoogleGenerativeAI(clienteKey);
       const model = genAI.getGenerativeModel({ model: 'gemini-2.5-flash' });
 
       const prompt = `Sei l'assistente IA ufficiale del sito. 
@@ -158,14 +178,13 @@ ${messaggio}`;
 
       res.json({ risposta: response.text() });
    } catch (error) {
-      console.error("Errore durante l'elaborazione della richiesta:", error.message);
-      res.status(500).json({ errore: `Il server ha riscontrato un problema: ${error.message}` });
+      console.error('Errore richiesta chat:', error.message);
+      res.status(500).json({ errore: error.message });
    }
 });
 
-// Homepage di controllo
 app.get('/', (req, res) => {
-   res.send('🚀 Gateway Multi-Cliente RAG pronto.');
+   res.send('🚀 Gateway RAG multi-cliente stabile e attivo.');
 });
 
 const PORT = process.env.PORT || 3000;
