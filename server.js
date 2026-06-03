@@ -65,7 +65,7 @@ app.post('/carica-documentazione', async (req, res) => {
       const regex = new RegExp(`.{1,${chunk_size}}(\\s|$)|.{1,${chunk_size}}`, 'g');
       const chunks = testoCompleto.match(regex) || [];
 
-      const genAI = new GoogleGenerativeAI(clienteKey);
+      const genAI = new GoogleGenerativeAI(clienteKey, { apiVersion: 'v1' });
       // text-embedding-004 è il modello di Gemini per generare vettori (embeddings)
       const embeddingModel = genAI.getGenerativeModel({ model: 'embedding-001' });
 
@@ -120,7 +120,7 @@ app.post('/chiedi', async (req, res) => {
          return res.status(400).json({ errore: 'Messaggio vuoto.' });
       }
 
-      const genAI = new GoogleGenerativeAI(clienteKey);
+      const genAI = new GoogleGenerativeAI(clienteKey, { apiVersion: 'v1' });
 
       // 1. Trasformiamo la domanda dell'utente in un vettore matematico
       const embeddingModel = genAI.getGenerativeModel({ model: 'text-embedding-004' });
