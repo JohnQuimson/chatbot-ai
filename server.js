@@ -9,9 +9,14 @@ require('dotenv').config();
 const app = express();
 app.use(express.json());
 
-// Inizializzazione del client Supabase
+// Inizializzazione del client Supabase con controllo di sicurezza
 const supabaseUrl = process.env.SUPABASE_URL;
 const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+
+if (!supabaseUrl || !supabaseKey) {
+   console.error("❌ ERRORE: Configurazione Supabase mancante nelle variabili d'ambiente!");
+   process.exit(1);
+}
 const supabase = createClient(supabaseUrl, supabaseKey);
 
 // Funzione interna per leggere e ripulire la whitelist dal file di testo
@@ -46,11 +51,34 @@ const corsOptions = {
    },
 };
 
-// Middleware CORS applicato globalmente
 app.use(cors(corsOptions));
 
 // =========================================================================
-// NUOVA ROTTA: Riceve il testo completo da WP, lo vettorizza e lo salva
+// FUNZIONE DI SUPPORTO: Genera embedding chiamando direttamente l'API v1
+// =========================================================================
+async function ottieniEmbeddingDiretto(testo, apiKey) {
+   // Forziamo l'URL stabile v1 e il modello text-embedding-004
+   const url = `https://generativelanguage.googleapis.com/v1/models/text-embedding-004:embedContent?key=${apiKey}`;
+
+   const response = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+         content: { parts: [{ text: testo }] },
+      }),
+   });
+
+   const data = await response.json();
+
+   if (!response.ok) {
+      throw new Error(data.error?.message || `Errore HTTP generico: ${response.status}`);
+   }
+
+   return data.embedding.values;
+}
+
+// =========================================================================
+// ROTTA: Riceve il testo completo da WP, lo vettorizza e lo salva
 // =========================================================================
 app.post('/carica-documentazione', async (req, res) => {
    try {
@@ -60,28 +88,22 @@ app.post('/carica-documentazione', async (req, res) => {
          return res.status(400).json({ errore: 'Dati mancanti (richiesti: testoCompleto, clienteKey, clienteId).' });
       }
 
-      // 1. CHUNKING: Dividiamo il testo in blocchi di circa 800 caratteri senza tagliare le parole a metà
+      // 1. CHUNKING: Dividiamo il testo in blocchi di circa 800 caratteri
       const chunk_size = 800;
       const regex = new RegExp(`.{1,${chunk_size}}(\\s|$)|.{1,${chunk_size}}`, 'g');
       const chunks = testoCompleto.match(regex) || [];
 
-      const genAI = new GoogleGenerativeAI(clienteKey, { apiVersion: 'v1' });
-      // text-embedding-004 è il modello di Gemini per generare vettori (embeddings)
-      const embeddingModel = genAI.getGenerativeModel({ model: 'embedding-001' });
-
-      // Svuota l'eventuale vecchia documentazione di QUESTO specifico cliente per evitare duplicati
+      // Svuota la vecchia documentazione di QUESTO specifico cliente per evitare duplicati
       await supabase.from('documenti_clienti').delete().eq('cliente_id', clienteId);
 
       const righeDaInserire = [];
 
-      // 2. Generiamo l'embedding per ogni singolo blocco di testo
+      // 2. Generiamo l'embedding usando la nostra funzione fetch sicura
       for (const chunk of chunks) {
          const testoPulito = chunk.trim();
          if (testoPulito.length === 0) continue;
 
-         // Chiamata all'API Gemini del cliente per ottenere il vettore del blocco
-         const embedResult = await embeddingModel.embedContent(testoPulito);
-         const embeddingVettoriale = embedResult.embedding.values;
+         const embeddingVettoriale = await ottieniEmbeddingDiretto(testoPulito, clienteKey);
 
          righeDaInserire.push({
             cliente_id: clienteId,
@@ -90,9 +112,8 @@ app.post('/carica-documentazione', async (req, res) => {
          });
       }
 
-      // 3. Salvataggio bulk (tutto in una volta) su Supabase
+      // 3. Salvataggio bulk su Supabase
       const { error } = await supabase.from('documenti_clienti').insert(righeDaInserire);
-
       if (error) throw error;
 
       res.json({
@@ -101,49 +122,41 @@ app.post('/carica-documentazione', async (req, res) => {
       });
    } catch (error) {
       console.error('Errore durante il caricamento della documentazione:', error.message);
-      res.status(500).json({ errore: 'Errore interno durante la vettorizzazione dei dati.' });
+      res.status(500).json({ errore: `Errore interno durante la vettorizzazione: ${error.message}` });
    }
 });
 
 // =========================================================================
-// ROTTA CHAT AGGIORNATA: Estrae solo il contesto utile da Supabase e risponde
+// ROTTA CHAT: Estrae solo il contesto utile da Supabase e risponde
 // =========================================================================
 app.post('/chiedi', async (req, res) => {
    try {
-      const { messaggio, clienteKey, clienteId } = req.body; // Ora serve clienteId al posto di contestoPrivato
+      const { messaggio, clienteKey, clienteId } = req.body;
 
-      // Validazione input
-      if (!clienteKey || !clienteId) {
-         return res.status(400).json({ errore: "Mancano le credenziali o l'ID del cliente." });
-      }
-      if (!messaggio) {
-         return res.status(400).json({ errore: 'Messaggio vuoto.' });
+      if (!clienteKey || !clienteId || !messaggio) {
+         return res.status(400).json({ errore: 'Dati in ingresso mancanti o vuoti.' });
       }
 
-      const genAI = new GoogleGenerativeAI(clienteKey, { apiVersion: 'v1' });
+      // 1. Trasformiamo la domanda dell'utente in un vettore usando il fetch diretto
+      const queryEmbedding = await ottieniEmbeddingDiretto(messaggio, clienteKey);
 
-      // 1. Trasformiamo la domanda dell'utente in un vettore matematico
-      const embeddingModel = genAI.getGenerativeModel({ model: 'text-embedding-004' });
-      const embedResult = await embeddingModel.embedContent(messaggio);
-      const queryEmbedding = embedResult.embedding.values;
-
-      // 2. Interroghiamo Supabase tramite la funzione SQL che abbiamo registrato prima
+      // 2. Interroghiamo Supabase tramite la funzione SQL rpc
       const { data: documentiTrovati, error: dbError } = await supabase.rpc('cerca_documenti', {
          query_embedding: queryEmbedding,
-         match_threshold: 0.2, // Soglia minima di somiglianza concettuale (0 = dissimile, 1 = identico)
-         match_count: 4, // Recuperiamo al massimo i 4 blocchi più pertinenti
+         match_threshold: 0.2,
+         match_count: 4,
          filtro_cliente: clienteId,
       });
 
       if (dbError) throw dbError;
 
-      // 3. Uniamo i blocchi di testo trovati in un'unica stringa di contesto
       const contestoRistretto =
          documentiTrovati && documentiTrovati.length > 0
             ? documentiTrovati.map((doc) => doc.contenuto).join('\n\n')
-            : 'Nessuna informazione specifica trovata nella documentazione per questa richiesta.';
+            : 'Nessuna informazione specifica trovata nella documentazione.';
 
-      // 4. Inizializziamo il modello di chat con il prompt ottimizzato
+      // 3. Inizializziamo il modello di chat per la risposta testuale (qui l'SDK va benissimo)
+      const genAI = new GoogleGenerativeAI(clienteKey);
       const model = genAI.getGenerativeModel({ model: 'gemini-3.1-flash-lite' });
 
       const prompt = `Sei l'assistente IA ufficiale del sito. 
@@ -162,18 +175,13 @@ ${messaggio}`;
       res.json({ risposta: response.text() });
    } catch (error) {
       console.error("Errore durante l'elaborazione della richiesta:", error.message);
-
-      if (error.message.includes('API_KEY_INVALID')) {
-         return res.status(401).json({ errore: 'API Key non valida.' });
-      }
-
-      res.status(500).json({ errore: 'Il server ha riscontrato un problema. Riprova.' });
+      res.status(500).json({ errore: `Il server ha riscontrato un problema: ${error.message}` });
    }
 });
 
 // Homepage di controllo
 app.get('/', (req, res) => {
-   res.send('🚀 Gateway Multi-Cliente RAG con Supabase attivo.');
+   res.send('🚀 Gateway Multi-Cliente RAG con Fetch Diretto attivo.');
 });
 
 const PORT = process.env.PORT || 3000;
