@@ -150,7 +150,7 @@ app.post('/chiedi', async (req, res) => {
       // Cerchiamo il contesto su Supabase
       const { data: documentiTrovati, error: dbError } = await supabase.rpc('cerca_documenti', {
          query_embedding: queryEmbedding,
-         match_threshold: 0.2,
+         match_threshold: 0.1,
          match_count: 4,
          filtro_cliente: clienteId,
       });
