@@ -56,9 +56,12 @@ app.use(
 // =========================================================================
 // FUNZIONE DI SUPPORTO: Chiamata HTTP diretta senza bug di SDK
 // =========================================================================
+// =========================================================================
+// FUNZIONE DI SUPPORTO: Chiamata HTTP diretta con il modello corretto
+// =========================================================================
 async function ottieniEmbeddingDiretto(testo, apiKey) {
-   // URL forzato sulla versione STABILE v1 con text-embedding-004 (768 dimensioni)
-   const url = `https://generativelanguage.googleapis.com/v1/models/text-embedding-004:embedContent?key=${apiKey}`;
+   // Usiamo l'endpoint v1 con il modello ufficiale 'gemini-embedding-001'
+   const url = `https://generativelanguage.googleapis.com/v1/models/gemini-embedding-001:embedContent?key=${apiKey}`;
 
    const response = await fetch(url, {
       method: 'POST',
