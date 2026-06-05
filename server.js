@@ -96,7 +96,7 @@ app.post('/carica-documentazione', async (req, res) => {
          return res.status(400).json({ errore: 'Dati mancanti.' });
       }
 
-      // 🗑️ Cancella i vecchi dati SOLO se WordPress ci dice esplicitamente di farlo (cioè al primo blocco)
+      // 1. 🗑️ Cancella i vecchi dati SOLO se WordPress ci dice esplicitamente di farlo (cioè al primo blocco)
       if (svuotaPrima === true) {
          const { error: deleteError } = await supabase.from('documenti_clienti').delete().eq('cliente_id', clienteId);
 
@@ -104,9 +104,15 @@ app.post('/carica-documentazione', async (req, res) => {
          console.log(`[INFO] Memoria svuotata per il cliente: ${clienteId}`);
       }
 
-      // ... IL RESTO DEL TUO CODICE (il ciclo for dei chunks, ecc.) RIMANE IDENTICO ...
+      // 2. ✂️ CHUNKING: Dividiamo il testo ricevuto in blocchi da 800 caratteri
+      const chunk_size = 800;
+      const regex = new RegExp(`.{1,${chunk_size}}(\\s|$)|.{1,${chunk_size}}`, 'g');
+      const chunks = testoCompleto.match(regex) || []; // <--- AGGIUNTO: Ora chunks è definito!
 
-      // Generiamo i vettori con la chiamata diretta v1
+      // 3. 📦 Inizializziamo l'array che conterrà le righe da salvare
+      const righeDaInserire = []; // <--- AGGIUNTO: Ora righeDaInserire è definito!
+
+      // 4. Generiamo i vettori con la chiamata diretta v1
       for (const chunk of chunks) {
          const testoPulito = chunk.trim();
          if (testoPulito.length === 0) continue;
@@ -120,9 +126,11 @@ app.post('/carica-documentazione', async (req, res) => {
          });
       }
 
-      // Salva su Supabase
-      const { error } = await supabase.from('documenti_clienti').insert(righeDaInserire);
-      if (error) throw error;
+      // 5. Salva su Supabase (eseguiamo l'insert solo se ci sono effettivamente righe)
+      if (righeDaInserire.length > 0) {
+         const { error } = await supabase.from('documenti_clienti').insert(righeDaInserire);
+         if (error) throw error;
+      }
 
       res.json({
          successo: true,
