@@ -145,6 +145,9 @@ app.post('/carica-documentazione', async (req, res) => {
 // =========================================================================
 // ROTTA CHAT: Risposta con Gemini 2.5 Flash ed estrazione regole dinamiche
 // =========================================================================
+// =========================================================================
+// ROTTA CHAT: Risposta con Gemini 2.5 Flash, regole e limiti dinamici
+// =========================================================================
 app.post('/chiedi', async (req, res) => {
    try {
       const { messaggio, clienteKey, clienteId } = req.body;
@@ -184,13 +187,35 @@ app.post('/chiedi', async (req, res) => {
       // Inizializziamo l'SDK di Google
       const genAI = new GoogleGenerativeAI(clienteKey);
 
-      // Configura il modello passando le regole del cliente direttamente nel parametro nativo systemInstruction
+      // 📐 CALCOLO DINAMICO DEL LIMITE TOKEN:
+      // Cerchiamo se nel prompt di sistema il cliente ha menzionato un numero di parole (es. max 30 parole o massimo 30 parole)
+      let maxTokensConfig = undefined;
+      const matchParole = istruzioniSistemaDinamiche.match(/(?:max|massimo)\s+(\d+)\s+parole/i);
+
+      if (matchParole && matchParole[1]) {
+         const numeroParole = parseInt(matchParole[1], 10);
+         // Convertiamo le parole in token (moltiplicando per 1.5) e aggiungiamo un margine per non troncare brutalmente l'ultima frase
+         maxTokensConfig = Math.round(numeroParole * 1.5) + 15;
+      }
+
+      // Configurazione di base dei parametri di generazione
+      const generationConfig = {
+         temperature: 0.5, // Abbassata per ridurre la tendenza del bot a perdersi in chiacchiere
+      };
+
+      // Se la regex ha trovato un limite scritto dal cliente, lo applichiamo alla configurazione
+      if (maxTokensConfig) {
+         generationConfig.maxOutputTokens = maxTokensConfig;
+      }
+
+      // Configura il modello passando sia le regole che la configurazione dei token dinamica
       const model = genAI.getGenerativeModel({
          model: 'gemini-2.5-flash',
          systemInstruction: istruzioniSistemaDinamiche,
+         generationConfig: generationConfig,
       });
 
-      // Il prompt ora contiene solo il materiale di consultazione e la richiesta dell'utente
+      // Il prompt contiene il materiale di consultazione e la richiesta dell'utente
       const prompt = `DOCUMENTAZIONE AZIENDALE DI RIFERIMENTO:
 ${contestoRistretto}
 
