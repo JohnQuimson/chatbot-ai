@@ -53,14 +53,8 @@ app.use(
    }),
 );
 
-// =========================================================================
-// FUNZIONE DI SUPPORTO: Chiamata HTTP diretta senza bug di SDK
-// =========================================================================
-// =========================================================================
-// FUNZIONE DI SUPPORTO: Chiamata HTTP diretta con il modello corretto
-// =========================================================================
 async function ottieniEmbeddingDiretto(testo, apiKey) {
-   // Usiamo l'endpoint v1 con il modello ufficiale 'gemini-embedding-001'
+   // Uso l'endpoint v1 con il modello 'gemini-embedding-001'
    const url = `https://generativelanguage.googleapis.com/v1/models/gemini-embedding-001:embedContent?key=${apiKey}`;
 
    const response = await fetch(url, {
@@ -85,7 +79,7 @@ async function ottieniEmbeddingDiretto(testo, apiKey) {
 }
 
 // =========================================================================
-// ROTTA: Carica Documentazione (Con supporto al Prompt di Sistema dinamico)
+// ROTTA: Carica Documentazione
 // =========================================================================
 app.post('/carica-documentazione', async (req, res) => {
    try {
@@ -96,7 +90,7 @@ app.post('/carica-documentazione', async (req, res) => {
          return res.status(400).json({ errore: 'Dati mancanti.' });
       }
 
-      // Pulizia dei caratteri decorativi inutili (===, ---, ecc.)
+      // Pulizia dei caratteri inutili (===, ---, ecc.)
       const testoFiltrato = testoCompleto
          .replace(/={3,}/g, '')
          .replace(/-{3,}/g, '')
@@ -104,7 +98,7 @@ app.post('/carica-documentazione', async (req, res) => {
          .replace(/_{3,}/g, '')
          .replace(/\s+/g, ' ');
 
-      // CHUNKING: Dividiamo il testo in blocchi da 800 caratteri
+      // CHUNKING: Divisione del testo in blocchi da 800 caratteri
       const chunk_size = 800;
       const regex = new RegExp(`.{1,${chunk_size}}(\\s|$)|.{1,${chunk_size}}`, 'g');
       const chunks = testoFiltrato.match(regex) || [];
@@ -122,7 +116,7 @@ app.post('/carica-documentazione', async (req, res) => {
             cliente_id: clienteId,
             contenuto: testoPulito,
             embedding: embeddingVettoriale,
-            sistema_prompt: sistemaPrompt || null, // Salviamo le regole del cliente in ogni riga
+            sistema_prompt: sistemaPrompt || null,
          });
       }
 
@@ -143,7 +137,7 @@ app.post('/carica-documentazione', async (req, res) => {
 });
 
 // =========================================================================
-// ROTTA CHAT: Risposta con Gemini 2.5 Flash, regole e limiti dinamici (FIXED)
+// ROTTA CHAT: Risposta con Gemini 2.5 Flash
 // =========================================================================
 app.post('/chiedi', async (req, res) => {
    try {
@@ -189,9 +183,9 @@ app.post('/chiedi', async (req, res) => {
             ? documentiTrovati.map((doc) => doc.contenuto).join('\n\n')
             : 'Nessuna informazione specifica trovata nella documentazione.';
 
-      // 3. ⚙️ CONFIGURAZIONE PARAMETRI DI GENERAZIONE (Senza limiti hardware di token)
+      // 3. ⚙️ CONFIGURAZIONE PARAMETRI DI GENERAZIONE (Senza limiti di token)
       const generationConfig = {
-         temperature: 0.5, // Mantiene il modello preciso e focalizzato sul prompt di sistema
+         temperature: 0.5,
       };
 
       // Inizializziamo l'SDK di Google ed il modello
