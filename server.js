@@ -186,7 +186,7 @@ app.post('/chiedi', async (req, res) => {
 
       // Uniamo il testo dei documenti trovati
       const contestoRistretto =
-         documentosTrovati && documentiTrovati.length > 0
+         documentiTrovati && documentiTrovati.length > 0
             ? documentiTrovati.map((doc) => doc.contenuto).join('\n\n')
             : 'Nessuna informazione specifica trovata nella documentazione.';
 
