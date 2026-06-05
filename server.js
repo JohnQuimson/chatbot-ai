@@ -104,10 +104,17 @@ app.post('/carica-documentazione', async (req, res) => {
          console.log(`[INFO] Memoria svuotata per il cliente: ${clienteId}`);
       }
 
+      const testoFiltrato = testoCompleto
+         .replace(/={3,}/g, '') // Rimuove ===
+         .replace(/-{3,}/g, '') // Rimuove ---
+         .replace(/\*{3,}/g, '') // Rimuove ***
+         .replace(/_{3,}/g, '') // Rimuove ___
+         .replace(/\s+/g, ' '); // Compatta gli spazi bianchi risultanti
+
       // 2. ✂️ CHUNKING: Dividiamo il testo ricevuto in blocchi da 800 caratteri
       const chunk_size = 800;
       const regex = new RegExp(`.{1,${chunk_size}}(\\s|$)|.{1,${chunk_size}}`, 'g');
-      const chunks = testoCompleto.match(regex) || []; // <--- AGGIUNTO: Ora chunks è definito!
+      const chunks = testoFiltrato.match(regex) || []; // <--- AGGIUNTO: Ora chunks è definito!
 
       // 3. 📦 Inizializziamo l'array che conterrà le righe da salvare
       const righeDaInserire = []; // <--- AGGIUNTO: Ora righeDaInserire è definito!
