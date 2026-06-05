@@ -236,8 +236,38 @@ ${messaggio}`;
 
       res.json({ risposta: response.text() });
    } catch (error) {
-      console.error('Errore richiesta chat:', error.message);
-      res.status(500).json({ errore: error.message });
+      console.error('❌ Errore intercettato nella chat:', error.message);
+
+      // --- CENTRALIZZAZIONE E TRADUZIONE DEGLI ERRORI ---
+      let messaggioFlessibile = 'Si è verificato un errore imprevisto. Riprova più tardi.';
+      let statusCode = 500;
+
+      const erroreTesto = error.message || '';
+
+      if (
+         erroreTesto.includes('429') ||
+         erroreTesto.includes('Quota exceeded') ||
+         erroreTesto.includes('Too Many Requests')
+      ) {
+         messaggioFlessibile =
+            "Ops! L'assistente ha ricevuto troppe richieste in questo momento. Il limite giornaliero del servizio è stato superato. Riprova più tardi o contatta il supporto.";
+         statusCode = 429;
+      } else if (erroreTesto.includes('API key not valid') || erroreTesto.includes('API_KEY_INVALID')) {
+         messaggioFlessibile =
+            "Errore di configurazione: La chiave API dell'assistente non è valida. Contatta l'amministratore del sito.";
+         statusCode = 401;
+      } else if (erroreTesto.includes('model not found') || erroreTesto.includes('404')) {
+         messaggioFlessibile =
+            'Il servizio di intelligenza artificiale è momentaneamente non disponibile o il modello è in manutenzione.';
+         statusCode = 404;
+      } else if (erroreTesto.includes('PGRST') || erroreTesto.includes('supabase')) {
+         messaggioFlessibile =
+            'Impossibile accedere alla memoria dei dati in questo momento. Riprova tra pochi istanti.';
+         statusCode = 503;
+      }
+
+      // Inviamo una risposta pulita al frontend, mantenendo il codice HTTP corretto
+      res.status(statusCode).json({ errore: messaggioFlessibile });
    }
 });
 
