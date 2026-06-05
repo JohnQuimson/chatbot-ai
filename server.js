@@ -154,7 +154,6 @@ app.post('/chiedi', async (req, res) => {
       }
 
       // 1. 🔍 QUERY DI SICUREZZA: Preleviamo SEMPRE il prompt di sistema di questo cliente
-      // Cerchiamo la prima riga qualsiasi nel database associata a questo cliente che abbia il prompt compilato
       const { data: righeCliente, error: promptError } = await supabase
          .from('documenti_clienti')
          .select('sistema_prompt')
@@ -190,23 +189,10 @@ app.post('/chiedi', async (req, res) => {
             ? documentiTrovati.map((doc) => doc.contenuto).join('\n\n')
             : 'Nessuna informazione specifica trovata nella documentazione.';
 
-      // 3. 📐 CALCOLO DINAMICO DEL LIMITE TOKEN:
-      let maxTokensConfig = undefined;
-      const matchParole = istruzioniSistemaDinamiche.match(/(?:max|massimo)\s+(\d+)\s+parole/i);
-
-      if (matchParole && matchParole[1]) {
-         const numeroParole = parseInt(matchParole[1], 10);
-         maxTokensConfig = Math.round(numeroParole * 1.5) + 15;
-      }
-
-      // Configurazione parametri di generazione
+      // 3. ⚙️ CONFIGURAZIONE PARAMETRI DI GENERAZIONE (Senza limiti hardware di token)
       const generationConfig = {
-         temperature: 0.5,
+         temperature: 0.5, // Mantiene il modello preciso e focalizzato sul prompt di sistema
       };
-
-      if (maxTokensConfig) {
-         generationConfig.maxOutputTokens = maxTokensConfig;
-      }
 
       // Inizializziamo l'SDK di Google ed il modello
       const genAI = new GoogleGenerativeAI(clienteKey);
