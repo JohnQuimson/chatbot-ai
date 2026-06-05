@@ -143,10 +143,7 @@ app.post('/carica-documentazione', async (req, res) => {
 });
 
 // =========================================================================
-// ROTTA CHAT: Risposta con Gemini 2.5 Flash ed estrazione regole dinamiche
-// =========================================================================
-// =========================================================================
-// ROTTA CHAT: Risposta con Gemini 2.5 Flash, regole e limiti dinamici
+// ROTTA CHAT: Risposta con Gemini 2.5 Flash, regole e limiti dinamici (FIXED)
 // =========================================================================
 app.post('/chiedi', async (req, res) => {
    try {
@@ -156,66 +153,70 @@ app.post('/chiedi', async (req, res) => {
          return res.status(400).json({ errore: 'Dati in ingresso mancanti.' });
       }
 
-      // Vettorizziamo la domanda dell'utente
+      // 1. 🔍 QUERY DI SICUREZZA: Preleviamo SEMPRE il prompt di sistema di questo cliente
+      // Cerchiamo la prima riga qualsiasi nel database associata a questo cliente che abbia il prompt compilato
+      const { data: righeCliente, error: promptError } = await supabase
+         .from('documenti_clienti')
+         .select('sistema_prompt')
+         .eq('cliente_id', clienteId)
+         .not('sistema_prompt', 'is', null)
+         .filter('sistema_prompt', 'neq', '')
+         .limit(1);
+
+      if (promptError) console.error('[REGISTRO] Errore recupero prompt:', promptError.message);
+
+      // Definiamo le istruzioni di sistema usando il risultato della query dedicata, oppure il fallback
+      const istruzioniSistemaDinamiche =
+         righeCliente && righeCliente.length > 0 && righeCliente[0].sistema_prompt
+            ? righeCliente[0].sistema_prompt
+            : 'Sei un assistente IA ufficiale del sito. Rispondi in modo professionale ed educato.';
+
+      // 2. 🧠 RICERCA SEMANTICA: Vettorizziamo la domanda per cercare il contesto
       const queryEmbedding = await ottieniEmbeddingDiretto(messaggio, clienteKey);
 
-      // Cerchiamo i blocchi di contesto più pertinenti su Supabase
+      // Cerchiamo i blocchi di contesto su Supabase
       const { data: documentiTrovati, error: dbError } = await supabase.rpc('cerca_documenti', {
          query_embedding: queryEmbedding,
-         match_threshold: 0.0, // Mantenuto a 0.0 come da tua configurazione
+         match_threshold: 0.0,
          match_count: 4,
          filtro_cliente: clienteId,
       });
 
       if (dbError) throw dbError;
 
-      // 🔍 Recuperiamo il prompt di sistema memorizzato dal cliente dal database
-      const rigaConPrompt = documentiTrovati?.find((d) => d.sistema_prompt && d.sistema_prompt.trim() !== '');
-
-      // Se il cliente ha configurato delle regole usiamo quelle, altrimenti usiamo un comportamento standard di fallback
-      const istruzioniSistemaDinamiche =
-         rigaConPrompt && rigaConPrompt.sistema_prompt.trim() !== ''
-            ? rigaConPrompt.sistema_prompt
-            : 'Sei un assistente IA ufficiale del sito. Rispondi in modo professionale ed educato.';
-
-      // Uniamo il testo dei documenti trovati per passarlo come documentazione
+      // Uniamo il testo dei documenti trovati
       const contestoRistretto =
-         documentiTrovati && documentiTrovati.length > 0
+         documentosTrovati && documentiTrovati.length > 0
             ? documentiTrovati.map((doc) => doc.contenuto).join('\n\n')
             : 'Nessuna informazione specifica trovata nella documentazione.';
 
-      // Inizializziamo l'SDK di Google
-      const genAI = new GoogleGenerativeAI(clienteKey);
-
-      // 📐 CALCOLO DINAMICO DEL LIMITE TOKEN:
-      // Cerchiamo se nel prompt di sistema il cliente ha menzionato un numero di parole (es. max 30 parole o massimo 30 parole)
+      // 3. 📐 CALCOLO DINAMICO DEL LIMITE TOKEN:
       let maxTokensConfig = undefined;
       const matchParole = istruzioniSistemaDinamiche.match(/(?:max|massimo)\s+(\d+)\s+parole/i);
 
       if (matchParole && matchParole[1]) {
          const numeroParole = parseInt(matchParole[1], 10);
-         // Convertiamo le parole in token (moltiplicando per 1.5) e aggiungiamo un margine per non troncare brutalmente l'ultima frase
          maxTokensConfig = Math.round(numeroParole * 1.5) + 15;
       }
 
-      // Configurazione di base dei parametri di generazione
+      // Configurazione parametri di generazione
       const generationConfig = {
-         temperature: 0.5, // Abbassata per ridurre la tendenza del bot a perdersi in chiacchiere
+         temperature: 0.5,
       };
 
-      // Se la regex ha trovato un limite scritto dal cliente, lo applichiamo alla configurazione
       if (maxTokensConfig) {
          generationConfig.maxOutputTokens = maxTokensConfig;
       }
 
-      // Configura il modello passando sia le regole che la configurazione dei token dinamica
+      // Inizializziamo l'SDK di Google ed il modello
+      const genAI = new GoogleGenerativeAI(clienteKey);
       const model = genAI.getGenerativeModel({
          model: 'gemini-2.5-flash',
          systemInstruction: istruzioniSistemaDinamiche,
          generationConfig: generationConfig,
       });
 
-      // Il prompt contiene il materiale di consultazione e la richiesta dell'utente
+      // Prompt finale per Gemini
       const prompt = `DOCUMENTAZIONE AZIENDALE DI RIFERIMENTO:
 ${contestoRistretto}
 
