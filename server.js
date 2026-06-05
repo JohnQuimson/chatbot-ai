@@ -79,6 +79,34 @@ async function ottieniEmbeddingDiretto(testo, apiKey) {
 }
 
 // =========================================================================
+// ROTTA: Cancella Documentazione Vecchia
+// =========================================================================
+app.post('/cancella-documentazione', async (req, res) => {
+   try {
+      const { clienteId } = req.body;
+
+      if (!clienteId) {
+         return res.status(400).json({ successo: false, errore: 'ID Cliente mancante.' });
+      }
+
+      console.log(`🗑️ Eliminazione documentazione precedente per il cliente: ${clienteId}`);
+
+      // Elimina tutte le righe che corrispondono al clienteId corrente
+      const { error } = await supabase.from('documenti_clienti').delete().eq('cliente_id', clienteId);
+
+      if (error) throw error;
+
+      res.json({
+         successo: true,
+         messaggio: `Memoria precedente svuotata con successo per il cliente ${clienteId}.`,
+      });
+   } catch (error) {
+      console.error('Errore durante la cancellazione:', error.message);
+      res.status(500).json({ successo: false, errore: error.message });
+   }
+});
+
+// =========================================================================
 // ROTTA: Carica Documentazione
 // =========================================================================
 app.post('/carica-documentazione', async (req, res) => {
