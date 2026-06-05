@@ -85,55 +85,48 @@ async function ottieniEmbeddingDiretto(testo, apiKey) {
 }
 
 // =========================================================================
-// ROTTA: Carica Documentazione
+// ROTTA: Carica Documentazione (Con supporto al Prompt di Sistema dinamico)
 // =========================================================================
 app.post('/carica-documentazione', async (req, res) => {
    try {
-      // Aggiungiamo "svuotaPrima" tra i dati ricevuti
-      const { clienteId, clienteKey, testoCompleto, svuotaPrima } = req.body;
+      // Riceviamo anche il "sistemaPrompt" inviato dal plugin WordPress
+      const { clienteId, clienteKey, testoCompleto, sistemaPrompt } = req.body;
 
       if (!clienteId || !clienteKey || !testoCompleto) {
          return res.status(400).json({ errore: 'Dati mancanti.' });
       }
 
-      // 1. 🗑️ Cancella i vecchi dati SOLO se WordPress ci dice esplicitamente di farlo (cioè al primo blocco)
-      if (svuotaPrima === true) {
-         const { error: deleteError } = await supabase.from('documenti_clienti').delete().eq('cliente_id', clienteId);
-
-         if (deleteError) throw deleteError;
-         console.log(`[INFO] Memoria svuotata per il cliente: ${clienteId}`);
-      }
-
+      // Pulizia dei caratteri decorativi inutili (===, ---, ecc.)
       const testoFiltrato = testoCompleto
-         .replace(/={3,}/g, '') // Rimuove ===
-         .replace(/-{3,}/g, '') // Rimuove ---
-         .replace(/\*{3,}/g, '') // Rimuove ***
-         .replace(/_{3,}/g, '') // Rimuove ___
-         .replace(/\s+/g, ' '); // Compatta gli spazi bianchi risultanti
+         .replace(/={3,}/g, '')
+         .replace(/-{3,}/g, '')
+         .replace(/\*{3,}/g, '')
+         .replace(/_{3,}/g, '')
+         .replace(/\s+/g, ' ');
 
-      // 2. ✂️ CHUNKING: Dividiamo il testo ricevuto in blocchi da 800 caratteri
+      // CHUNKING: Dividiamo il testo in blocchi da 800 caratteri
       const chunk_size = 800;
       const regex = new RegExp(`.{1,${chunk_size}}(\\s|$)|.{1,${chunk_size}}`, 'g');
-      const chunks = testoFiltrato.match(regex) || []; // <--- AGGIUNTO: Ora chunks è definito!
+      const chunks = testoFiltrato.match(regex) || [];
 
-      // 3. 📦 Inizializziamo l'array che conterrà le righe da salvare
-      const righeDaInserire = []; // <--- AGGIUNTO: Ora righeDaInserire è definito!
+      const righeDaInserire = [];
 
-      // 4. Generiamo i vettori con la chiamata diretta v1
       for (const chunk of chunks) {
          const testoPulito = chunk.trim();
          if (testoPulito.length === 0) continue;
 
+         // Generazione del vettore (embedding) per il frammento di testo
          const embeddingVettoriale = await ottieniEmbeddingDiretto(testoPulito, clienteKey);
 
          righeDaInserire.push({
             cliente_id: clienteId,
             contenuto: testoPulito,
             embedding: embeddingVettoriale,
+            sistema_prompt: sistemaPrompt || null, // Salviamo le regole del cliente in ogni riga
          });
       }
 
-      // 5. Salva su Supabase (eseguiamo l'insert solo se ci sono effettivamente righe)
+      // Salvataggio incrementale su Supabase
       if (righeDaInserire.length > 0) {
          const { error } = await supabase.from('documenti_clienti').insert(righeDaInserire);
          if (error) throw error;
@@ -150,7 +143,7 @@ app.post('/carica-documentazione', async (req, res) => {
 });
 
 // =========================================================================
-// ROTTA CHAT: Risposta con Gemini 2.5 Flash
+// ROTTA CHAT: Risposta con Gemini 2.5 Flash ed estrazione regole dinamiche
 // =========================================================================
 app.post('/chiedi', async (req, res) => {
    try {
@@ -160,36 +153,48 @@ app.post('/chiedi', async (req, res) => {
          return res.status(400).json({ errore: 'Dati in ingresso mancanti.' });
       }
 
-      // Vettorizziamo la domanda con la chiamata diretta v1
+      // Vettorizziamo la domanda dell'utente
       const queryEmbedding = await ottieniEmbeddingDiretto(messaggio, clienteKey);
 
-      // Cerchiamo il contesto su Supabase
+      // Cerchiamo i blocchi di contesto più pertinenti su Supabase
       const { data: documentiTrovati, error: dbError } = await supabase.rpc('cerca_documenti', {
          query_embedding: queryEmbedding,
-         match_threshold: 0.0,
+         match_threshold: 0.0, // Mantenuto a 0.0 come da tua configurazione
          match_count: 4,
          filtro_cliente: clienteId,
       });
 
       if (dbError) throw dbError;
 
+      // 🔍 Recuperiamo il prompt di sistema memorizzato dal cliente dal database
+      const rigaConPrompt = documentiTrovati?.find((d) => d.sistema_prompt && d.sistema_prompt.trim() !== '');
+
+      // Se il cliente ha configurato delle regole usiamo quelle, altrimenti usiamo un comportamento standard di fallback
+      const istruzioniSistemaDinamiche =
+         rigaConPrompt && rigaConPrompt.sistema_prompt.trim() !== ''
+            ? rigaConPrompt.sistema_prompt
+            : 'Sei un assistente IA ufficiale del sito. Rispondi in modo professionale ed educato.';
+
+      // Uniamo il testo dei documenti trovati per passarlo come documentazione
       const contestoRistretto =
-         documentiTrovati && documentiTrovati.length > 0
+         documentosTrovati && documentiTrovati.length > 0
             ? documentiTrovati.map((doc) => doc.contenuto).join('\n\n')
             : 'Nessuna informazione specifica trovata nella documentazione.';
 
-      // Per la generazione del testo usiamo l'SDK con Gemini 2.5 Flash (che funziona benissimo)
+      // Inizializziamo l'SDK di Google
       const genAI = new GoogleGenerativeAI(clienteKey);
-      const model = genAI.getGenerativeModel({ model: 'gemini-2.5-flash' });
 
-      const prompt = `Sei l'assistente IA ufficiale del sito. 
-Rispondi in modo professionale basandoti esclusivamente sulle informazioni fornite qui sotto. 
-Se la risposta non è presente nei dati, consiglia gentilmente di contattare l'assistenza umana.
+      // Configura il modello passando le regole del cliente direttamente nel parametro nativo systemInstruction
+      const model = genAI.getGenerativeModel({
+         model: 'gemini-2.5-flash',
+         systemInstruction: istruzioniSistemaDinamiche,
+      });
 
-INFORMAZIONI DI RIFERIMENTO PERTINENTI:
+      // Il prompt ora contiene solo il materiale di consultazione e la richiesta dell'utente
+      const prompt = `DOCUMENTAZIONE AZIENDALE DI RIFERIMENTO:
 ${contestoRistretto}
 
-DOMANDA UTENTE:
+DOMANDA DELL'UTENTE:
 ${messaggio}`;
 
       const result = await model.generateContent(prompt);
