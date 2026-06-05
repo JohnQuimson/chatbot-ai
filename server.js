@@ -89,21 +89,22 @@ async function ottieniEmbeddingDiretto(testo, apiKey) {
 // =========================================================================
 app.post('/carica-documentazione', async (req, res) => {
    try {
-      const { testoCompleto, clienteKey, clienteId } = req.body;
+      // Aggiungiamo "svuotaPrima" tra i dati ricevuti
+      const { clienteId, clienteKey, testoCompleto, svuotaPrima } = req.body;
 
-      if (!testoCompleto || !clienteKey || !clienteId) {
-         return res.status(400).json({ errore: 'Dati mancanti (testoCompleto, clienteKey, clienteId).' });
+      if (!clienteId || !clienteKey || !testoCompleto) {
+         return res.status(400).json({ errore: 'Dati mancanti.' });
       }
 
-      // Dividiamo il testo in blocchi
-      const chunk_size = 800;
-      const regex = new RegExp(`.{1,${chunk_size}}(\\s|$)|.{1,${chunk_size}}`, 'g');
-      const chunks = testoCompleto.match(regex) || [];
+      // 🗑️ Cancella i vecchi dati SOLO se WordPress ci dice esplicitamente di farlo (cioè al primo blocco)
+      if (svuotaPrima === true) {
+         const { error: deleteError } = await supabase.from('documenti_clienti').delete().eq('cliente_id', clienteId);
 
-      // Svuota i vecchi dati del cliente
-      await supabase.from('documenti_clienti').delete().eq('cliente_id', clienteId);
+         if (deleteError) throw deleteError;
+         console.log(`[INFO] Memoria svuotata per il cliente: ${clienteId}`);
+      }
 
-      const righeDaInserire = [];
+      // ... IL RESTO DEL TUO CODICE (il ciclo for dei chunks, ecc.) RIMANE IDENTICO ...
 
       // Generiamo i vettori con la chiamata diretta v1
       for (const chunk of chunks) {
