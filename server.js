@@ -250,16 +250,19 @@ ${messaggio}`;
          erroreTesto.includes('Too Many Requests')
       ) {
          messaggioFlessibile =
-            "Ops! L'assistente ha ricevuto troppe richieste in questo momento. Il limite giornaliero del servizio è stato superato. Riprova più tardi o contatta il supporto.";
+            "L'assistente ha ricevuto troppe richieste in questo momento. Il limite superato. Riprova più tardi o contatta il supporto.";
          statusCode = 429;
       } else if (erroreTesto.includes('API key not valid') || erroreTesto.includes('API_KEY_INVALID')) {
          messaggioFlessibile =
             "Errore di configurazione: La chiave API dell'assistente non è valida. Contatta l'amministratore del sito.";
          statusCode = 401;
       } else if (erroreTesto.includes('model not found') || erroreTesto.includes('404')) {
-         messaggioFlessibile =
-            'Il servizio di intelligenza artificiale è momentaneamente non disponibile o il modello è in manutenzione.';
+         messaggioFlessibile = 'Il modello non è momentaneamente o è in manutenzione.';
          statusCode = 404;
+      } else if (erroreTesto.includes('') || erroreTesto.includes('408')) {
+         messaggioFlessibile =
+            'Il server è occupato o il modello sta impiegando più tempo del previsto per rispondere. Riprova tra qualche istante.';
+         statusCode = 408;
       } else if (erroreTesto.includes('PGRST') || erroreTesto.includes('supabase')) {
          messaggioFlessibile =
             'Impossibile accedere alla memoria dei dati in questo momento. Riprova tra pochi istanti.';
