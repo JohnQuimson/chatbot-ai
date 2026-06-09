@@ -165,17 +165,17 @@ app.post('/carica-documentazione', async (req, res) => {
 });
 
 // =========================================================================
-// ROTTA CHAT: Risposta con Gemini 2.5 Flash
+// ROTTA CHAT: Risposta con Gemini 2.5 Flash + Gestione Cronologia
 // =========================================================================
 app.post('/chiedi', async (req, res) => {
    try {
-      const { messaggio, clienteKey, clienteId } = req.body;
+      const { messaggio, clienteKey, clienteId, cronologia } = req.body;
 
       if (!clienteKey || !clienteId || !messaggio) {
          return res.status(400).json({ errore: 'Dati in ingresso mancanti.' });
       }
 
-      // 1. 🔍 QUERY DI SICUREZZA: Preleviamo SEMPRE il prompt di sistema di questo cliente
+      // 1. Preleviamo il prompt di sistema di questo cliente
       const { data: righeCliente, error: promptError } = await supabase
          .from('documenti_clienti')
          .select('sistema_prompt')
@@ -186,16 +186,14 @@ app.post('/chiedi', async (req, res) => {
 
       if (promptError) console.error('[REGISTRO] Errore recupero prompt:', promptError.message);
 
-      // Definiamo le istruzioni di sistema usando il risultato della query dedicata, oppure il fallback
-      const istruzioniSistemaDinamiche =
+      const basePrompt =
          righeCliente && righeCliente.length > 0 && righeCliente[0].sistema_prompt
             ? righeCliente[0].sistema_prompt
             : 'Sei un assistente IA ufficiale del sito. Rispondi in modo professionale ed educato.';
 
-      // 2. 🧠 RICERCA SEMANTICA: Vettorizziamo la domanda per cercare il contesto
+      // 2. RICERCA SEMANTICA CON IL SOLO MESSAGGIO ATTUALE
       const queryEmbedding = await ottieniEmbeddingDiretto(messaggio, clienteKey);
 
-      // Cerchiamo i blocchi di contesto su Supabase
       const { data: documentiTrovati, error: dbError } = await supabase.rpc('cerca_documenti', {
          query_embedding: queryEmbedding,
          match_threshold: 0.0,
@@ -205,18 +203,41 @@ app.post('/chiedi', async (req, res) => {
 
       if (dbError) throw dbError;
 
-      // Uniamo il testo dei documenti trovati
       const contestoRistretto =
          documentiTrovati && documentiTrovati.length > 0
             ? documentiTrovati.map((doc) => doc.contenuto).join('\n\n')
             : 'Nessuna informazione specifica trovata nella documentazione.';
 
-      // 3. ⚙️ CONFIGURAZIONE PARAMETRI DI GENERAZIONE (Senza limiti di token)
+      // Iniettiamo il contesto recuperato all'interno delle istruzioni di sistema
+      const istruzioniSistemaDinamiche = `${basePrompt}\n\nCONTESTO AZIENDALE DI RIFERIMENTO (Usa queste informazioni per rispondere se pertinenti):\n${contestoRistretto}`;
+
+      // 3. COSTRUZIONE DELLA CRONOLOGIA STRUTTURATA PER GEMINI
+      let contents = [];
+
+      // Se il frontend ha passato dei messaggi passati, li mappiamo nei ruoli corretti
+      if (cronologia && Array.isArray(cronologia) && cronologia.length > 0) {
+         // Teniamo solo le ultime 6 battute (3 utente e 3 bot) per stabilità dei token
+         const ultimeInterazioni = cronologia.slice(-6);
+
+         ultimeInterazioni.forEach((item) => {
+            contents.push({
+               role: item.ruolo === 'utente' ? 'user' : 'model',
+               parts: [{ text: item.testo }],
+            });
+         });
+      }
+
+      // Appendiamo infine l'ultimo messaggio dell'utente alla fine della storia
+      contents.push({
+         role: 'user',
+         parts: [{ text: messaggio }],
+      });
+
+      // 4. CONFIGURAZIONE PARAMETRI DI GENERAZIONE
       const generationConfig = {
-         temperature: 0.5,
+         temperature: 0.4,
       };
 
-      // Inizializziamo l'SDK di Google ed il modello
       const genAI = new GoogleGenerativeAI(clienteKey);
       const model = genAI.getGenerativeModel({
          model: 'gemini-2.5-flash',
@@ -224,24 +245,18 @@ app.post('/chiedi', async (req, res) => {
          generationConfig: generationConfig,
       });
 
-      // Prompt finale per Gemini
-      const prompt = `DOCUMENTAZIONE AZIENDALE DI RIFERIMENTO:
-${contestoRistretto}
-
-DOMANDA DELL'UTENTE:
-${messaggio}`;
-
-      const result = await model.generateContent(prompt);
+      // Passiamo l'array della cronologia strutturata a generateContent
+      const result = await model.generateContent({
+         contents: contents,
+      });
       const response = await result.response;
 
       res.json({ risposta: response.text() });
    } catch (error) {
       console.error('❌ Errore intercettato nella chat:', error.message);
 
-      // --- CENTRALIZZAZIONE E TRADUZIONE DEGLI ERRORI ---
       let messaggioFlessibile = 'Si è verificato un errore imprevisto. Riprova più tardi.';
       let statusCode = 500;
-
       const erroreTesto = error.message || '';
 
       if (
@@ -250,26 +265,22 @@ ${messaggio}`;
          erroreTesto.includes('Too Many Requests')
       ) {
          messaggioFlessibile =
-            "L'assistente ha ricevuto troppe richieste in questo momento. Il limite superato. Riprova più tardi o contatta il supporto.";
+            "L'assistente ha ricevuto troppe richieste in questo momento. Il limite è stato superato. Riprova più tardi.";
          statusCode = 429;
       } else if (erroreTesto.includes('API key not valid') || erroreTesto.includes('API_KEY_INVALID')) {
-         messaggioFlessibile =
-            "Errore di configurazione: La chiave API dell'assistente non è valida. Contatta l'amministratore del sito.";
+         messaggioFlessibile = "Errore di configurazione: La chiave API dell'assistente non è valida.";
          statusCode = 401;
       } else if (erroreTesto.includes('model not found') || erroreTesto.includes('404')) {
-         messaggioFlessibile = 'Il modello non è momentaneamente o è in manutenzione.';
+         messaggioFlessibile = 'Il modello non è momentaneamente disponibile o è in manutenzione.';
          statusCode = 404;
-      } else if (erroreTesto.includes('') || erroreTesto.includes('408')) {
-         messaggioFlessibile =
-            'Il server è occupato o il modello sta impiegando più tempo del previsto per rispondere. Riprova tra qualche istante.';
+      } else if (erroreTesto.includes('408')) {
+         messaggioFlessibile = 'Il server ha impiegato troppo tempo per rispondere. Riprova tra qualche istante.';
          statusCode = 408;
       } else if (erroreTesto.includes('PGRST') || erroreTesto.includes('supabase')) {
-         messaggioFlessibile =
-            'Impossibile accedere alla memoria dei dati in questo momento. Riprova tra pochi istanti.';
+         messaggioFlessibile = 'Impossibile accedere alla memoria dei dati in questo momento.';
          statusCode = 503;
       }
 
-      // Inviamo una risposta pulita al frontend, mantenendo il codice HTTP corretto
       res.status(statusCode).json({ errore: messaggioFlessibile });
    }
 });
