@@ -165,7 +165,7 @@ app.post('/carica-documentazione', async (req, res) => {
 });
 
 // =========================================================================
-// ROTTA CHAT: Risposta con Gemini 2.5 Flash + Gestione Cronologia
+// ROTTA CHAT: Risposta in STREAMING con Gemini 2.5 Flash + Cronologia
 // =========================================================================
 app.post('/chiedi', async (req, res) => {
    try {
@@ -175,7 +175,12 @@ app.post('/chiedi', async (req, res) => {
          return res.status(400).json({ errore: 'Dati in ingresso mancanti.' });
       }
 
-      // 1. Preleviamo il prompt di sistema di questo cliente
+      // 1. Configurazione degli Header per lo Streaming (Server-Sent Events)
+      res.setHeader('Content-Type', 'text/event-stream');
+      res.setHeader('Cache-Control', 'no-cache');
+      res.setHeader('Connection', 'keep-alive');
+
+      // 2. Preleviamo il prompt di sistema di questo cliente
       const { data: righeCliente, error: promptError } = await supabase
          .from('documenti_clienti')
          .select('sistema_prompt')
@@ -191,7 +196,7 @@ app.post('/chiedi', async (req, res) => {
             ? righeCliente[0].sistema_prompt
             : 'Sei un assistente IA ufficiale del sito. Rispondi in modo professionale ed educato.';
 
-      // 2. RICERCA SEMANTICA CON IL SOLO MESSAGGIO ATTUALE
+      // 3. RICERCA SEMANTICA (Embedding della sola domanda corrente)
       const queryEmbedding = await ottieniEmbeddingDiretto(messaggio, clienteKey);
 
       const { data: documentiTrovati, error: dbError } = await supabase.rpc('cerca_documenti', {
@@ -208,17 +213,12 @@ app.post('/chiedi', async (req, res) => {
             ? documentiTrovati.map((doc) => doc.contenuto).join('\n\n')
             : 'Nessuna informazione specifica trovata nella documentazione.';
 
-      // Iniettiamo il contesto recuperato all'interno delle istruzioni di sistema
-      const istruzioniSistemaDinamiche = `${basePrompt}\n\nCONTESTO AZIENDALE DI RIFERIMENTO (Usa queste informazioni per rispondere se pertinenti):\n${contestoRistretto}`;
+      const istruzioniSistemaDinamiche = `${basePrompt}\n\nCONTESTO AZIENDALE DI RIFERIMENTO:\n${contestoRistretto}`;
 
-      // 3. COSTRUZIONE DELLA CRONOLOGIA STRUTTURATA PER GEMINI
+      // 4. COSTRUZIONE DELLA CRONOLOGIA
       let contents = [];
-
-      // Se il frontend ha passato dei messaggi passati, li mappiamo nei ruoli corretti
       if (cronologia && Array.isArray(cronologia) && cronologia.length > 0) {
-         // Teniamo solo le ultime 6 battute (3 utente e 3 bot) per stabilità dei token
          const ultimeInterazioni = cronologia.slice(-6);
-
          ultimeInterazioni.forEach((item) => {
             contents.push({
                role: item.ruolo === 'utente' ? 'user' : 'model',
@@ -227,61 +227,41 @@ app.post('/chiedi', async (req, res) => {
          });
       }
 
-      // Appendiamo infine l'ultimo messaggio dell'utente alla fine della storia
       contents.push({
          role: 'user',
          parts: [{ text: messaggio }],
       });
 
-      // 4. CONFIGURAZIONE PARAMETRI DI GENERAZIONE
-      const generationConfig = {
-         temperature: 0.4,
-      };
-
+      // 5. INIZIALIZZAZIONE MODELLO GEMINI
       const genAI = new GoogleGenerativeAI(clienteKey);
       const model = genAI.getGenerativeModel({
          model: 'gemini-2.5-flash',
          systemInstruction: istruzioniSistemaDinamiche,
-         generationConfig: generationConfig,
+         generationConfig: { temperature: 0.4 },
       });
 
-      // Passiamo l'array della cronologia strutturata a generateContent
-      const result = await model.generateContent({
+      // 6. ATTIVAZIONE DELLO STREAMING DA GOOGLE
+      const resultStream = await model.generateContentStream({
          contents: contents,
       });
-      const response = await result.response;
 
-      res.json({ risposta: response.text() });
-   } catch (error) {
-      console.error('❌ Errore intercettato nella chat:', error.message);
-
-      let messaggioFlessibile = 'Si è verificato un errore imprevisto. Riprova più tardi.';
-      let statusCode = 500;
-      const erroreTesto = error.message || '';
-
-      if (
-         erroreTesto.includes('429') ||
-         erroreTesto.includes('Quota exceeded') ||
-         erroreTesto.includes('Too Many Requests')
-      ) {
-         messaggioFlessibile =
-            "L'assistente ha ricevuto troppe richieste in questo momento. Il limite è stato superato. Riprova più tardi.";
-         statusCode = 429;
-      } else if (erroreTesto.includes('API key not valid') || erroreTesto.includes('API_KEY_INVALID')) {
-         messaggioFlessibile = "Errore di configurazione: La chiave API dell'assistente non è valida.";
-         statusCode = 401;
-      } else if (erroreTesto.includes('model not found') || erroreTesto.includes('404')) {
-         messaggioFlessibile = 'Il modello non è momentaneamente disponibile o è in manutenzione.';
-         statusCode = 404;
-      } else if (erroreTesto.includes('408')) {
-         messaggioFlessibile = 'Il server ha impiegato troppo tempo per rispondere. Riprova tra qualche istante.';
-         statusCode = 408;
-      } else if (erroreTesto.includes('PGRST') || erroreTesto.includes('supabase')) {
-         messaggioFlessibile = 'Impossibile accedere alla memoria dei dati in questo momento.';
-         statusCode = 503;
+      // Cicliamo sui frammenti di testo appena arrivano da Google e li inviamo al client
+      for await (const chunk of resultStream.stream) {
+         const chunkText = chunk.text();
+         // Usiamo il formato standard SSE: "data: il_testo_qui\n\n"
+         res.write(`data: ${JSON.stringify({ testo: chunkText })}\n\n`);
       }
 
-      res.status(statusCode).json({ errore: messaggioFlessibile });
+      // Chiudiamo lo stream quando l'IA ha finito di parlare
+      res.write(`data: [DONE]\n\n`);
+      res.end();
+   } catch (error) {
+      console.error('❌ Errore nella chat streaming:', error.message);
+      // Se c'è un errore, inviamo un messaggio speciale contrassegnato prima di chiudere
+      res.write(
+         `data: ${JSON.stringify({ errore: "Si è verificato un problema di connessione con il server dell'assistente." })}\n\n`,
+      );
+      res.end();
    }
 });
 
