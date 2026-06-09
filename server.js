@@ -234,11 +234,14 @@ app.post('/chiedi', async (req, res) => {
 
       // 5. INIZIALIZZAZIONE MODELLO GEMINI
       const genAI = new GoogleGenerativeAI(clienteKey);
-      const model = genAI.getGenerativeModel({
-         model: 'gemini-2.5-flash',
-         systemInstruction: istruzioniSistemaDinamiche,
-         generationConfig: { temperature: 0.4 },
-      });
+      const model = genAI.getGenerativeModel(
+         {
+            model: 'gemini-2.5-flash',
+            systemInstruction: istruzioniSistemaDinamiche,
+            generationConfig: { temperature: 0.4 },
+         },
+         { apiVersion: 'v1' },
+      );
 
       // 6. ATTIVAZIONE DELLO STREAMING DA GOOGLE
       const resultStream = await model.generateContentStream({
