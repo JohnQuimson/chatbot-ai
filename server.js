@@ -215,8 +215,31 @@ app.post('/chiedi', async (req, res) => {
 
       const istruzioniSistemaDinamiche = `${basePrompt}\n\nCONTESTO AZIENDALE DI RIFERIMENTO:\n${contestoRistretto}`;
 
-      // 4. COSTRUZIONE DELLA CRONOLOGIA
+      // =========================================================================
+      // 4. COSTRUZIONE DELLA CRONOLOGIA (Iniezione sicura delle istruzioni v1)
+      // =========================================================================
       let contents = [];
+
+      // Inseriamo le istruzioni di sistema come messaggio iniziale "user" con risposta "model" di conferma.
+      // Questo è il metodo più compatibile in assoluto con le API v1 stabili.
+      contents.push({
+         role: 'user',
+         parts: [
+            {
+               text: `ISTRUZIONI DI SISTEMA IMPORTANTI:\n${istruzioniSistemaDinamiche}\n\nPrendi nota di queste istruzioni e applicale d'ora in avanti.`,
+            },
+         ],
+      });
+      contents.push({
+         role: 'model',
+         parts: [
+            {
+               text: 'Ho ricevuto le istruzioni di sistema e la documentazione aziendale. Sono pronto a rispondere agli utenti seguendo queste regole.',
+            },
+         ],
+      });
+
+      // Aggiungiamo il resto della cronologia dei messaggi precedenti (se esiste)
       if (cronologia && Array.isArray(cronologia) && cronologia.length > 0) {
          const ultimeInterazioni = cronologia.slice(-6);
          ultimeInterazioni.forEach((item) => {
@@ -227,23 +250,27 @@ app.post('/chiedi', async (req, res) => {
          });
       }
 
+      // Infine aggiungiamo l'ultimo messaggio attuale dell'utente
       contents.push({
          role: 'user',
          parts: [{ text: messaggio }],
       });
 
-      // 5. INIZIALIZZAZIONE MODELLO GEMINI
+      // =========================================================================
+      // 5. INIZIALIZZAZIONE MODELLO GEMINI (Pulita per API v1)
+      // =========================================================================
       const genAI = new GoogleGenerativeAI(clienteKey);
       const model = genAI.getGenerativeModel(
          {
             model: 'gemini-2.5-flash',
-            systemInstruction: istruzioniSistemaDinamiche,
             generationConfig: { temperature: 0.4 },
          },
          { apiVersion: 'v1' },
-      );
+      ); // Ora la v1 accetterà il payload al 100% perché è standard
 
-      // 6. ATTIVAZIONE DELLO STREAMING DA GOOGLE
+      // =========================================================================
+      // 6. ATTIVAZIONE DELLO STREAMING
+      // =========================================================================
       const resultStream = await model.generateContentStream({
          contents: contents,
       });
@@ -251,11 +278,9 @@ app.post('/chiedi', async (req, res) => {
       // Cicliamo sui frammenti di testo appena arrivano da Google e li inviamo al client
       for await (const chunk of resultStream.stream) {
          const chunkText = chunk.text();
-         // Usiamo il formato standard SSE: "data: il_testo_qui\n\n"
          res.write(`data: ${JSON.stringify({ testo: chunkText })}\n\n`);
       }
 
-      // Chiudiamo lo stream quando l'IA ha finito di parlare
       res.write(`data: [DONE]\n\n`);
       res.end();
    } catch (error) {
