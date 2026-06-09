@@ -165,7 +165,7 @@ app.post('/carica-documentazione', async (req, res) => {
 });
 
 // =========================================================================
-// ROTTA CHAT: Risposta in STREAMING con Gemini 2.5 Flash + Cronologia
+// ROTTA CHAT: Risposta STANDARD (No Streaming) con Gemini 2.5 Flash
 // =========================================================================
 app.post('/chiedi', async (req, res) => {
    try {
@@ -175,12 +175,7 @@ app.post('/chiedi', async (req, res) => {
          return res.status(400).json({ errore: 'Dati in ingresso mancanti.' });
       }
 
-      // 1. Configurazione degli Header per lo Streaming (Server-Sent Events)
-      res.setHeader('Content-Type', 'text/event-stream');
-      res.setHeader('Cache-Control', 'no-cache');
-      res.setHeader('Connection', 'keep-alive');
-
-      // 2. Preleviamo il prompt di sistema di questo cliente
+      // 1. Preleviamo il prompt di sistema di questo cliente
       const { data: righeCliente, error: promptError } = await supabase
          .from('documenti_clienti')
          .select('sistema_prompt')
@@ -194,9 +189,9 @@ app.post('/chiedi', async (req, res) => {
       const basePrompt =
          righeCliente && righeCliente.length > 0 && righeCliente[0].sistema_prompt
             ? righeCliente[0].sistema_prompt
-            : 'Sei un assistente IA ufficiale del sito. Rispondi in modo professionale ed educato.';
+            : 'Sei un assistente IA ufficiale del sito. Rispondi in modo breve (max 50 parole), professionale ed educato.';
 
-      // 3. RICERCA SEMANTICA (Embedding della sola domanda corrente)
+      // 2. RICERCA SEMANTICA (Embedding della sola domanda corrente)
       const queryEmbedding = await ottieniEmbeddingDiretto(messaggio, clienteKey);
 
       const { data: documentiTrovati, error: dbError } = await supabase.rpc('cerca_documenti', {
@@ -215,31 +210,17 @@ app.post('/chiedi', async (req, res) => {
 
       const istruzioniSistemaDinamiche = `${basePrompt}\n\nCONTESTO AZIENDALE DI RIFERIMENTO:\n${contestoRistretto}`;
 
-      // =========================================================================
-      // 4. COSTRUZIONE DELLA CRONOLOGIA (Iniezione sicura delle istruzioni v1)
-      // =========================================================================
+      // 3. COSTRUZIONE DELLA CRONOLOGIA
       let contents = [];
-
-      // Inseriamo le istruzioni di sistema come messaggio iniziale "user" con risposta "model" di conferma.
-      // Questo è il metodo più compatibile in assoluto con le API v1 stabili.
       contents.push({
          role: 'user',
-         parts: [
-            {
-               text: `ISTRUZIONI DI SISTEMA IMPORTANTI:\n${istruzioniSistemaDinamiche}\n\nPrendi nota di queste istruzioni e applicale d'ora in avanti.`,
-            },
-         ],
+         parts: [{ text: `ISTRUZIONI DI SISTEMA:\n${istruzioniSistemaDinamiche}\n\nConferma di aver letto.` }],
       });
       contents.push({
          role: 'model',
-         parts: [
-            {
-               text: 'Ho ricevuto le istruzioni di sistema e la documentazione aziendale. Sono pronto a rispondere agli utenti seguendo queste regole.',
-            },
-         ],
+         parts: [{ text: 'Ho letto le istruzioni. Risponderò in modo sintetico basandomi sul contesto.' }],
       });
 
-      // Aggiungiamo il resto della cronologia dei messaggi precedenti (se esiste)
       if (cronologia && Array.isArray(cronologia) && cronologia.length > 0) {
          const ultimeInterazioni = cronologia.slice(-6);
          ultimeInterazioni.forEach((item) => {
@@ -250,46 +231,37 @@ app.post('/chiedi', async (req, res) => {
          });
       }
 
-      // Infine aggiungiamo l'ultimo messaggio attuale dell'utente
       contents.push({
          role: 'user',
          parts: [{ text: messaggio }],
       });
 
-      // =========================================================================
-      // 5. INIZIALIZZAZIONE MODELLO GEMINI (Pulita per API v1)
-      // =========================================================================
+      // 4. INIZIALIZZAZIONE MODELLO E GENERAZIONE RISPOSTA (Standard v1)
       const genAI = new GoogleGenerativeAI(clienteKey);
       const model = genAI.getGenerativeModel(
          {
-            model: 'gemini-3.5-flash',
+            model: 'gemini-2.5-flash',
             generationConfig: { temperature: 0.4 },
          },
          { apiVersion: 'v1' },
-      ); // Ora la v1 accetterà il payload al 100% perché è standard
+      );
 
-      // =========================================================================
-      // 6. ATTIVAZIONE DELLO STREAMING
-      // =========================================================================
-      const resultStream = await model.generateContentStream({
+      // Chiamata standard senza stream
+      const result = await model.generateContent({
          contents: contents,
       });
 
-      // Cicliamo sui frammenti di testo appena arrivano da Google e li inviamo al client
-      for await (const chunk of resultStream.stream) {
-         const chunkText = chunk.text();
-         res.write(`data: ${JSON.stringify({ testo: chunkText })}\n\n`);
-      }
+      const rispostaTesto = result.response.text();
 
-      res.write(`data: [DONE]\n\n`);
-      res.end();
+      // Rispondiamo con un normalissimo oggetto JSON
+      return res.json({ successo: true, testo: rispostaTesto });
    } catch (error) {
-      console.error('❌ Errore nella chat streaming:', error.message);
-      // Se c'è un errore, inviamo un messaggio speciale contrassegnato prima di chiudere
-      res.write(
-         `data: ${JSON.stringify({ errore: "Si è verificato un problema di connessione con il server dell'assistente." })}\n\n`,
-      );
-      res.end();
+      console.error('❌ Errore nella chat standard:', error.message);
+      let messaggioUtente = "Si è verificato un problema di connessione con l'assistente.";
+      if (error.message.includes('503') || error.message.includes('high demand')) {
+         messaggioUtente = 'I server sono momentaneamente sovraccarichi. Riprova tra un istante.';
+      }
+      return res.status(500).json({ errore: messaggioUtente });
    }
 });
 
