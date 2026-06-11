@@ -240,7 +240,7 @@ app.post('/chiedi', async (req, res) => {
       const genAI = new GoogleGenerativeAI(clienteKey);
       const model = genAI.getGenerativeModel(
          {
-            model: 'gemini-2.5-flash',
+            model: 'gemini-2.5-flash-lite',
             generationConfig: { temperature: 0.4 },
          },
          { apiVersion: 'v1' },
