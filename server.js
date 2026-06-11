@@ -186,7 +186,7 @@ app.post('/chiedi', async (req, res) => {
       const basePrompt =
          righeCliente && righeCliente.length > 0 && righeCliente[0].sistema_prompt
             ? righeCliente[0].sistema_prompt
-            : 'Sei un assistente IA ufficiale del sito. Rispondi in modo breve (max 50 parole), professionale ed educato.';
+            : 'Sei un assistente IA ufficiale del sito. Professionale ed educato.';
 
       // 2. RICERCA SEMANTICA (Embedding della sola domanda corrente)
       const queryEmbedding = await ottieniEmbeddingDiretto(messaggio, clienteKey);
