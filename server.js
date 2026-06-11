@@ -107,48 +107,45 @@ app.post('/cancella-documentazione', async (req, res) => {
 });
 
 // =========================================================================
-// ROTTA: Carica Documentazione
+// ROTTA: Carica Documentazione (Chunking Strutturato basato su "===")
 // =========================================================================
 app.post('/carica-documentazione', async (req, res) => {
    try {
-      // Riceviamo anche il "sistemaPrompt" inviato dal plugin WordPress
       const { clienteId, clienteKey, testoCompleto, sistemaPrompt } = req.body;
 
       if (!clienteId || !clienteKey || !testoCompleto) {
          return res.status(400).json({ errore: 'Dati mancanti.' });
       }
 
-      // Pulizia dei caratteri inutili (===, ---, ecc.)
-      const testoFiltrato = testoCompleto
-         .replace(/={3,}/g, '')
-         .replace(/-{3,}/g, '')
-         .replace(/\*{3,}/g, '')
-         .replace(/_{3,}/g, '')
-         .replace(/\s+/g, ' ');
-
-      // CHUNKING: Divisione del testo in blocchi da 800 caratteri
-      const chunk_size = 800;
-      const regex = new RegExp(`.{1,${chunk_size}}(\\s|$)|.{1,${chunk_size}}`, 'g');
-      const chunks = testoFiltrato.match(regex) || [];
+      // 1. CHUNKING STRUTTURATO: Dividiamo il testo usando le linee di "=" come delimitatori.
+      // Cerca linee composte da 10 o più simboli "uguale" consecutivo (es. =======)
+      const sezioni = testoCompleto.split(/={10,}/);
 
       const righeDaInserire = [];
 
-      for (const chunk of chunks) {
-         const testoPulito = chunk.trim();
-         if (testoPulito.length === 0) continue;
+      for (let sezione of sezioni) {
+         // Pulizia preventiva da eventuali altri micro-separatori rimasti nel testo (es: --- o ___)
+         let testoPulito = sezione
+            .replace(/-{3,}/g, '')
+            .replace(/\*{3,}/g, '')
+            .replace(/_{3,}/g, '')
+            .trim();
 
-         // Generazione del vettore (embedding) per il frammento di testo
+         // Saltiamo i blocchi vuoti o i soli residui di intestazione troppo corti
+         if (testoPulito.length < 30) continue;
+
+         // Generazione del vettore (embedding) per la macro-sezione intatta
          const embeddingVettoriale = await ottieniEmbeddingDiretto(testoPulito, clienteKey);
 
          righeDaInserire.push({
             cliente_id: clienteId,
-            contenuto: testoPulito,
+            contenuto: testoPulito, // Mantiene intatti gli invii a capo originali (\n)
             embedding: embeddingVettoriale,
             sistema_prompt: sistemaPrompt || null,
          });
       }
 
-      // Salvataggio incrementale su Supabase
+      // 2. Salvataggio incrementale su Supabase
       if (righeDaInserire.length > 0) {
          const { error } = await supabase.from('documenti_clienti').insert(righeDaInserire);
          if (error) throw error;
@@ -156,7 +153,7 @@ app.post('/carica-documentazione', async (req, res) => {
 
       res.json({
          successo: true,
-         messaggio: `Documentazione sincronizzata. Generati ${righeDaInserire.length} blocchi.`,
+         messaggio: `Documentazione sincronizzata. Generati ${righeDaInserire.length} blocchi logici basati sulle tue sezioni.`,
       });
    } catch (error) {
       console.error('Errore caricamento documentazione:', error.message);
